@@ -133,8 +133,11 @@ Adapter details and intentional limitations:
   Z-index 20 and downward fill below 5. These operations can erase thin/boundary
   obstacles and invent filled regions. Diagnostics report additions/removals.
   No fake corner obstacles are added on empty input.
-- Preview runs at 1 Hz with at most 20,000 valid returns. One bounded processing
-  worker runs independently of the ROS input/TF receive loop (no concurrent
+- Preview runs at 1 Hz with at most 20,000 valid returns. The reader uses a
+  NumPy view of validated Livox CDR1 data, avoiding per-point
+  Python ROS-object creation that can starve TF reception on Foxy. The decoder
+  is checked against ROS serialization, endian/alignment and truncated data.
+  One bounded processing worker runs independently of the ROS input/TF receive loop (no concurrent
   overlapping map updates). The 16-scan queue selects the newest complete scan
   covered by TF, received less than 1.5 seconds ago. There is no latest-pose
   fallback: each 10 ms point-time bin requires its own full map-to-body pose.

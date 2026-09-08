@@ -20,7 +20,7 @@ from tf2_ros import Buffer, TransformListener
 
 from perception_core import (OccupancyMap, SHAPE, RESOLUTION, Scan, ScanBuffer,
                              cat_preprocess, centers, deskew_livox, grid_origin,
-                             livox_points, rotation_matrix, transform_points)
+                             livox_points, rotation_matrix, transform_points, decode_livox_cdr)
 
 CLOUD_TOPICS = ("input_cloud", "ground_points", "obstacle_points", "nearfield_points",
                 "occupancy_raw", "occupancy_cat")
@@ -54,7 +54,7 @@ class CatPreview(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         qos = QoSProfile(depth=2, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         self.subscription = self.create_subscription(
-            CustomMsg, self.cfg["input_topic"], self.receive, qos)
+            CustomMsg, self.cfg["input_topic"], self.receive, qos, raw=True)
         self.cloud_pubs = {name: self.create_publisher(PointCloud2, "/g1_cat/" + name, 1)
                            for name in CLOUD_TOPICS}
         self.roi_pub = self.create_publisher(Marker, "/g1_cat/roi", 1)
@@ -102,17 +102,14 @@ class CatPreview(Node):
 
     def receive(self, message):
         received = time.monotonic()
-        start = stamp_ns(message.header.stamp)
-        count = len(message.points)
-        if (message.header.frame_id != self.cfg["source_frame"] or start <= 0
-                or not 0 < count <= 100000 or count != message.point_num):
-            self.input_error = "invalid raw packet frame, timestamp or size"
+        try:
+            packet = decode_livox_cdr(message)
+            if packet.frame != self.cfg["source_frame"]:
+                raise ValueError("unexpected LiDAR frame")
+        except (ValueError, UnicodeError) as exc:
+            self.input_error = str(exc)
             return
-        span = max(p.offset_time for p in message.points)
-        if span > 200000000:
-            self.input_error = "raw packet duration exceeds 200 ms"
-            return
-        self.scans.append(Scan(message, received, start, start + span))
+        self.scans.append(Scan(packet, received, packet.start_ns, packet.end_ns))
         self.input_error = None
 
     def schedule(self):
@@ -237,6 +234,15 @@ class CatPreview(Node):
             stage("export_ms")
             processed = cat_preprocess(raw)
             stage("morphology_ms")
+            ranges = np.linalg.norm(xyz, axis=1)
+            within = (ranges <= self.cfg["max_range"])
+            within &= (points >= origin).all(axis=1) & (points < origin + np.array(SHAPE)*RESOLUTION).all(axis=1)
+            clouds = (("input_cloud", points[within]), ("ground_points", points[within & ground]),
+                      ("obstacle_points", points[within & ~ground]),
+                      ("nearfield_points", points[within & (ranges < 0.5)]),
+                      ("occupancy_raw", centers(raw, origin)),
+                      ("occupancy_cat", centers(processed, origin)))
+            stage("prepare_clouds_ms")
             if time.monotonic() - scan.received > self.cfg["max_output_age"]:
                 raise ValueError("processing exceeded maximum output age")
             if self.scans.snapshot()[1] != self.generation or Path(self.cfg["arm_token"]).exists():
@@ -247,15 +253,8 @@ class CatPreview(Node):
             self.last_good_received = scan.received
             self.last_stamp_ns = scan.start_ns
             self.sequence += 1
-            ranges = np.linalg.norm(xyz, axis=1)
-            within = (ranges <= self.cfg["max_range"])
-            within &= (points >= origin).all(axis=1) & (points < origin + np.array(SHAPE)*RESOLUTION).all(axis=1)
             now_msg = self.get_clock().now().to_msg()
-            for name, values in (("input_cloud", points[within]), ("ground_points", points[within & ground]),
-                                 ("obstacle_points", points[within & ~ground]),
-                                 ("nearfield_points", points[within & (ranges < 0.5)]),
-                                 ("occupancy_raw", centers(raw, origin)),
-                                 ("occupancy_cat", centers(processed, origin))):
+            for name, values in clouds:
                 self.publish_cloud(name, values, now_msg)
             self.publish_roi(origin, now_msg)
             details = dict(info, origin=origin.tolist(), sensor_origin=sensor.tolist(),
@@ -283,7 +282,10 @@ class CatPreview(Node):
             details["output_receive_age_s"] = time.monotonic()-scan.received
             stage("publish_snapshot_ms")
             details["timings"] = timing
-            self.report("PREVIEW_OK", **details)
+            if details["output_receive_age_s"] > self.cfg["max_output_age"]:
+                self.invalidate("published sample aged while writing snapshot")
+            else:
+                self.report("PREVIEW_OK", **details)
         except Exception as exc:
             self.invalidate(type(exc).__name__ + ": " + str(exc))
 

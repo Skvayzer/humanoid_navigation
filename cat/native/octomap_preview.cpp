@@ -12,8 +12,9 @@
 namespace {
 thread_local std::string last_error;
 struct Map {
+  struct Observation { double stamp; bool occupied; };
   octomap::OcTree tree;
-  std::unordered_map<octomap::OcTreeKey, double, octomap::OcTreeKey::KeyHash> observed;
+  std::unordered_map<octomap::OcTreeKey, Observation, octomap::OcTreeKey::KeyHash> observed;
   size_t retired = 0;
   bool bounded = false;
   octomap::OcTreeKey lower_key, upper_key;
@@ -86,13 +87,13 @@ int cat_insert(void* ptr, const float* xyz, const uint8_t* hit, size_t count,
     for (const auto& key : free_keys) {
       if (occupied_keys.count(key)) continue;
       if (!map.observed.count(key)) tree.setNodeValue(key, 0.0f, true);
-      tree.updateNode(key, false, true);
-      map.observed[key] = now;
+      const auto* node = tree.updateNode(key, false, true);
+      map.observed[key] = {now, tree.isNodeOccupied(node)};
     }
     for (const auto& key : occupied_keys) {
       if (!map.observed.count(key)) tree.setNodeValue(key, 0.0f, true);
-      tree.updateNode(key, true, true);
-      map.observed[key] = now;
+      const auto* node = tree.updateNode(key, true, true);
+      map.observed[key] = {now, tree.isNodeOccupied(node)};
     }
     tree.updateInnerOccupancy();
     return 0;
@@ -119,7 +120,7 @@ int cat_prune(void* ptr, const double* lower, const double* upper, double now, d
       const bool outside = p.x() < lower[0] || p.x() >= upper[0] ||
                            p.y() < lower[1] || p.y() >= upper[1] ||
                            p.z() < lower[2] || p.z() >= upper[2];
-      if (outside || now - it->second > ttl) {
+      if (outside || now - it->second.stamp > ttl) {
         it = map.observed.erase(it);
         ++removed;
       } else { ++it; }
@@ -142,7 +143,8 @@ int cat_prune(void* ptr, const double* lower, const double* upper, double now, d
 }
 
 // C-order XYZ grid, cell centers = lower_corner + (index + .5)*resolution.
-// 0=unknown, 1=observed free, 2=occupied. search() handles coarser leaves too.
+// 0=unknown, 1=observed free, 2=occupied. Scatter tracked leaf states directly;
+// avoid hundreds of thousands of redundant full-depth tree searches per tick.
 int cat_export(void* ptr, const double* lower, int nx, int ny, int nz,
                uint8_t* output, size_t capacity) {
   try {
@@ -153,13 +155,15 @@ int cat_export(void* ptr, const double* lower, int nx, int ny, int nz,
     auto& map = *static_cast<Map*>(ptr);
     auto& tree = map.tree;
     const double r = tree.getResolution();
-    size_t index = 0;
-    for (int x=0; x<nx; ++x) for (int y=0; y<ny; ++y) for (int z=0; z<nz; ++z) {
-      octomap::OcTreeKey key;
-      const bool valid = tree.coordToKeyChecked(lower[0]+(x+.5)*r, lower[1]+(y+.5)*r,
-                                                 lower[2]+(z+.5)*r, key);
-      auto* node = valid && map.observed.count(key) ? tree.search(key) : nullptr;
-      output[index++] = !node ? 0 : (tree.isNodeOccupied(node) ? 2 : 1);
+    octomap::OcTreeKey base;
+    if (!tree.coordToKeyChecked(lower[0]+.5*r, lower[1]+.5*r, lower[2]+.5*r, base)) return -1;
+    std::fill(output, output+capacity, uint8_t(0));
+    for (const auto& item : map.observed) {
+      const int x = int(item.first[0])-int(base[0]);
+      const int y = int(item.first[1])-int(base[1]);
+      const int z = int(item.first[2])-int(base[2]);
+      if (x>=0 && x<nx && y>=0 && y<ny && z>=0 && z<nz)
+        output[(size_t(x)*ny+y)*nz+z] = item.second.occupied ? 2 : 1;
     }
     return 0;
   } catch (const std::exception& e) { last_error = e.what(); return -1; }

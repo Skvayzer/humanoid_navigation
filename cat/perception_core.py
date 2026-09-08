@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import threading
 import time
+import struct
 
 import numpy as np
 from scipy.ndimage import binary_closing, convolve
@@ -111,6 +112,55 @@ class Scan:
     end_ns: int
 
 
+@dataclass(frozen=True)
+class LivoxPacket:
+    points: np.ndarray
+    point_num: int
+    frame: str
+    start_ns: int
+    end_ns: int
+
+
+def decode_livox_cdr(data):
+    """Strict CDR1 decoder for the bundled Livox CustomMsg definition.
+
+    rclpy raw=True avoids allocating ~20,000 Python ROS objects every 100 ms.
+    This changes only CAT's subscription, not messages, middleware or drivers.
+    All alignment is relative to the payload after its 4-byte encapsulation.
+    """
+    if len(data) < 24 or data[:2] not in (b'\x00\x00', b'\x00\x01'):
+        raise ValueError("unsupported/truncated Livox CDR1 encapsulation")
+    endian = '<' if data[1] == 1 else '>'
+    sec, nsec, length = struct.unpack_from(endian+'iII', data, 4)
+    if sec < 0 or nsec >= 1000000000 or not 1 <= length <= 256 or 16+length > len(data):
+        raise ValueError("invalid Livox CDR header")
+    if data[15+length] != 0:
+        raise ValueError("unterminated Livox frame")
+    frame = data[16:15+length].decode('utf-8')
+    pos = 4 + ((12+length+7)//8)*8
+    if pos+20 > len(data):
+        raise ValueError("truncated Livox metadata")
+    timebase, count = struct.unpack_from(endian+'QI', data, pos)
+    sequence_count = struct.unpack_from(endian+'I', data, pos+16)[0]
+    pos += 20
+    if count != sequence_count or not 0 < count <= 100000:
+        raise ValueError("invalid Livox point count")
+    # CDR may omit the final structure's single byte of trailing alignment.
+    if not pos + count*20 - 1 <= len(data) <= pos + count*20:
+        raise ValueError("Livox CDR point sequence size mismatch")
+    if len(data) == pos+count*20-1:
+        data = bytes(data)+b'\x00'
+    dtype = np.dtype(dict(names=['offset_time','x','y','z','reflectivity','tag','line'],
+        formats=[endian+'u4',endian+'f4',endian+'f4',endian+'f4','u1','u1','u1'],
+        offsets=[0,4,8,12,16,17,18], itemsize=20))
+    points = np.frombuffer(data, dtype=dtype, count=count, offset=pos)
+    span = int(points['offset_time'].max())
+    start = sec*1000000000+nsec
+    if start <= 0 or abs(timebase-start) > 1000000 or span > 200000000:
+        raise ValueError("invalid Livox point times/timebase")
+    return LivoxPacket(points, count, frame, start, start+span)
+
+
 class ScanBuffer:
     """Small thread-safe queue; processing picks newest scan fully covered by TF."""
     def __init__(self, capacity=16):
@@ -146,8 +196,11 @@ def livox_points(message, max_points=20000, min_range=0.0):
     count = len(message.points)
     if count != message.point_num or not 0 < count <= 100000 or max_points < 1:
         raise ValueError("malformed or oversized Livox packet")
-    values = np.array([(p.x, p.y, p.z, p.offset_time, p.tag, p.line)
-                       for p in message.points], dtype=np.float64)
+    if isinstance(message, LivoxPacket):
+        values = np.column_stack([message.points[n] for n in ('x','y','z','offset_time','tag','line')])
+    else:
+        values = np.array([(p.x, p.y, p.z, p.offset_time, p.tag, p.line)
+                           for p in message.points], dtype=np.float64)
     xyz, offsets = values[:, :3], values[:, 3].astype(np.int64)
     if offsets.min() < 0 or offsets.max() > 200000000:
         raise ValueError("invalid Livox point times (>200 ms)")

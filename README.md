@@ -49,6 +49,7 @@ commands, TF names, CPU/memory use, or guarantee physical safety.
 3. [Maps, frames, calibration and obstacle behavior](docs/MAPS_AND_FRAMES.md).
 4. [Snapshot provenance and packaging changes](PROVENANCE.md).
 5. [Third-party licenses](THIRD_PARTY.md).
+6. [Fresh ARM64 build and validation results](docs/VALIDATION.md).
 
 ```bash
 git clone https://github.com/Skvayzer/humanoid_navigation.git

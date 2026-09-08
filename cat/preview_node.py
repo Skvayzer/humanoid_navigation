@@ -61,6 +61,7 @@ class CatPreview(Node):
         self.reset_time = time.monotonic()
         self.sequence = 0
         self.last_status = None
+        self.last_report_time = 0.0
         self.timer = self.create_timer(1.0 / self.cfg["rate_hz"], self.tick)
         print("CAT PERCEPTION ONLY: no SDK, policy, shared memory, TF or motion publishers.", flush=True)
 
@@ -108,8 +109,9 @@ class CatPreview(Node):
         message = String()
         message.data = json.dumps(data, sort_keys=True, allow_nan=False)
         self.status_pub.publish(message)
-        if state != self.last_status or self.sequence % 5 == 0:
+        if state != self.last_status or time.monotonic() - self.last_report_time >= 5:
             print(message.data, flush=True)
+            self.last_report_time = time.monotonic()
         self.last_status = state
 
     def invalidate(self, reason):

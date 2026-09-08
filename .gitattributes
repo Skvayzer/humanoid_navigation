@@ -1,0 +1,6 @@
+# Deployed source is checksum-audited; do not rewrite its line endings on clone.
+src/** -text
+nav/** -text
+config/** -text
+third_party/** -text
+vendor/licenses/** -text

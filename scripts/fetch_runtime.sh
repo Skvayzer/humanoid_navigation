@@ -11,7 +11,7 @@ if [[ ! -f "$archive" ]]; then
 fi
 (cd "$project_dir/artifacts" && sha256sum -c ../manifests/runtime_asset.sha256)
 # Preserve any existing local runtime modifications instead of overwriting.
-if (cd "$project_dir" && sha256sum --quiet -c manifests/runtime_files.sha256 2>/dev/null); then
+if (cd "$project_dir" && sha256sum --quiet -c manifests/runtime_files.sha256 >/dev/null 2>&1); then
   echo 'Tested runtime is already present and verified.'
   exit 0
 fi

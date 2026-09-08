@@ -6,6 +6,9 @@ set -u
 case "${1:-validate}" in
   validate)
     python3 -c 'import preview_node; print("ROS imports OK; node NOT started")'
+    # The launcher runs validate with --network none. Exercise actual Foxy
+    # subscription resolution too; imports/mocked lookups cannot catch it.
+    export CAT_RUN_ROS_GRAPH_TESTS=1 ROS_DOMAIN_ID=101
     exec python3 -m unittest discover -s /opt/cat/tests -v
     ;;
   preview)

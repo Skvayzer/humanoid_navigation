@@ -130,6 +130,9 @@ Adapter details and intentional limitations:
   independently checked. Missing/stale data clears output and reports invalid.
   Output clouds are already in map coordinates, stamped at publication for
   Foxglove. Source timestamps and clock offset remain visible in diagnostics.
+- Foxy's Python TF listener uses relative topic names. The CAT node explicitly
+  remaps its TF inputs to `/tf` and `/tf_static`; `/g1_cat/tf*` are not inputs
+  and must not be populated with fabricated transforms to work around an error.
 - Docker shares networking for vendor discovery, but no devices, host IPC/PID,
   privileged capability, writable existing workspace, SDK or motor publisher.
   Read-only root filesystem, 2 CPU and 1.5 GiB limits. Network sharing is **not**
@@ -151,8 +154,11 @@ print(sample['origin'], sample['resolution'], sample['source_stamp'])
 ```
 
 `container.sh validate` runs native/geometry/no-motion tests without a robot
-network and imports the ROS node without starting it. GitHub Actions builds
-and runs these tests natively on ARM64. For development **only**, if CMake,
+network. It also constructs the actual ROS node in isolated test domain 101
+and verifies reception of a synthetic global transform with its processing
+timer disabled. This catches namespaced-TF wiring mistakes that import/unit
+checks alone miss. GitHub Actions builds and tests natively on ARM64.
+For development **only**, if CMake,
 G++, liboctomap-dev, NumPy and SciPy are already installed, use
 `bash cat/scripts/build_native.sh`; it writes only `cat/build` and starts no ROS
 node. Do not install the upstream training environment on the robot.

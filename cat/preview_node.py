@@ -29,7 +29,11 @@ def stamp_seconds(stamp):
 class CatPreview(Node):
     def __init__(self):
         # Disable implicit parameter service and rosout publishers as well.
+        # Foxy's Python TransformListener subscribes to relative 'tf' topics.
+        # Keep our outputs namespaced, but read the existing global SLAM TF.
+        # These node-local remaps also apply when launched outside Docker.
         super().__init__("cat_perception_preview", namespace="g1_cat",
+                         cli_args=["--ros-args", "-r", "tf:=/tf", "-r", "tf_static:=/tf_static"],
                          enable_rosout=False, start_parameter_services=False)
         defaults = {"input_topic": "/g1_slam/cloud_registered_body", "fixed_frame": "map",
                     "source_frame": "body", "floor_z": 0.0, "ground_cutoff": 0.10,

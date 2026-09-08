@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.10)
+project(cat_octomap_preview LANGUAGES CXX)
+find_package(octomap REQUIRED)
+add_library(cat_octomap SHARED octomap_preview.cpp)
+target_compile_features(cat_octomap PRIVATE cxx_std_14)
+target_compile_options(cat_octomap PRIVATE -Wall -Wextra -Werror)
+target_include_directories(cat_octomap PRIVATE ${OCTOMAP_INCLUDE_DIRS})
+target_link_libraries(cat_octomap ${OCTOMAP_LIBRARIES})

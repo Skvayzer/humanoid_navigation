@@ -1,9 +1,9 @@
 /g1_cat/cat_perception_preview:
   ros__parameters:
-    # Existing full 3D TF: map -> world -> camera_init -> body. Never Nav2's
-    # planar base, raw livox_frame, or another ground/gravity rotation.
-    input_topic: /g1_slam/cloud_registered_body
-    source_frame: body
+    # Raw Livox points + sensor-time map->body poses. Apply G1's known
+    # LiDAR-to-IMU extrinsics once; never use a fabricated livox_frame TF.
+    input_topic: /livox/lidar
+    source_frame: livox_frame
     fixed_frame: map
     floor_z: 0.0
     ground_cutoff: 0.10
@@ -11,9 +11,11 @@
     rate_hz: 1.0
     max_points: 20000
     max_range: 2.5
-    max_receive_age: 0.5
-    max_tf_delta: 0.25
-    map_reset_seconds: 10.0
+    min_range: 0.0  # no software blind zone; zero/nonfinite/invalid returns rejected
+    max_receive_age: 1.5
+    max_output_age: 2.0
+    display_hold_seconds: 3.0
+    cell_ttl_seconds: 30.0
     max_octomap_nodes: 1000000
     snapshot_directory: /data
     snapshot_every: 5

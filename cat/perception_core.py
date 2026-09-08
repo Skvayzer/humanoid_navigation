@@ -3,7 +3,11 @@
 No policy imports, shared memory, robot SDK, goals, or command messages.
 """
 import ctypes as ct
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
+import threading
+import time
 
 import numpy as np
 from scipy.ndimage import binary_closing, convolve
@@ -99,6 +103,97 @@ def centers(mask, origin):
                       dtype=np.float32)
 
 
+@dataclass(frozen=True)
+class Scan:
+    message: object
+    received: float
+    start_ns: int
+    end_ns: int
+
+
+class ScanBuffer:
+    """Small thread-safe queue; processing picks newest scan fully covered by TF."""
+    def __init__(self, capacity=16):
+        self.queue = deque(maxlen=capacity)
+        self.lock = threading.Lock()
+        self.generation = 0
+
+    def append(self, scan):
+        with self.lock:
+            if self.queue and scan.start_ns < self.queue[-1].start_ns:
+                self.queue.clear()
+                self.generation += 1
+            if not self.queue or scan.start_ns > self.queue[-1].start_ns:
+                self.queue.append(scan)
+
+    def snapshot(self):
+        with self.lock:
+            return list(self.queue), self.generation
+
+    @staticmethod
+    def select(scans, now, max_age, after_ns, tf_end_ns):
+        return next((s for s in reversed(scans)
+                     if s.start_ns > after_ns and now-s.received <= max_age
+                     and s.end_ns <= tf_end_ns), None)
+
+
+def livox_points(message, max_points=20000, min_range=0.0):
+    """Raw Livox returns. Retain close points before sampling farther points.
+
+    No software blind zone by default, but nonfinite/zero/invalid-tag returns
+    never become obstacles OR clearing rays. Returns nanosecond point offsets.
+    """
+    count = len(message.points)
+    if count != message.point_num or not 0 < count <= 100000 or max_points < 1:
+        raise ValueError("malformed or oversized Livox packet")
+    values = np.array([(p.x, p.y, p.z, p.offset_time, p.tag, p.line)
+                       for p in message.points], dtype=np.float64)
+    xyz, offsets = values[:, :3], values[:, 3].astype(np.int64)
+    if offsets.min() < 0 or offsets.max() > 200000000:
+        raise ValueError("invalid Livox point times (>200 ms)")
+    ranges = np.linalg.norm(xyz, axis=1)
+    tags = values[:, 4].astype(np.uint8) & 0x30
+    valid = np.isfinite(xyz).all(axis=1) & (ranges > max(min_range, 1e-6))
+    valid &= (values[:, 5] < 4) & ((tags == 0) | (tags == 0x10))
+    near = np.flatnonzero(valid & (ranges < 0.5))
+    far = np.flatnonzero(valid & (ranges >= 0.5))
+    def sample(indices, limit):
+        if len(indices) <= limit:
+            return indices
+        return indices[np.linspace(0, len(indices)-1, limit).astype(int)]
+    kept_near = sample(near, min(max_points, len(near)))
+    kept = np.concatenate((kept_near, sample(far, max_points-len(kept_near))))
+    info = dict(input_points=count, valid_points=int(valid.sum()),
+                invalid_returns=int((~valid).sum()), nearfield_available=len(near),
+                nearfield_retained=len(kept_near), sampled_points=len(kept))
+    return np.asarray(xyz[kept], dtype=np.float32), offsets[kept], info
+
+
+def deskew_livox(xyz, offsets_ns, start_ns, pose_at, sensor_translation,
+                 bin_ns=10000000):
+    """Use full SLAM TF at each 10 ms point-time bin (bounded pose interpolation).
+
+    G1 vendor cloud is roll-flipped relative to its native IMU. Apply exactly
+    the existing FAST-LIO extrinsic_R=diag(1,-1,-1), then extrinsic_T. The pose
+    callback must provide sensor-time map<-body TF; no latest-pose fallback.
+    Return a distinct world ray origin per point as the LiDAR moves.
+    """
+    xyz = np.asarray(xyz)
+    offsets_ns = np.asarray(offsets_ns, dtype=np.int64)
+    if xyz.shape != (len(offsets_ns), 3) or bin_ns < 1:
+        raise ValueError("bad timed-point arrays")
+    body = xyz * np.array([1, -1, -1]) + np.asarray(sensor_translation)
+    points = np.empty_like(xyz, dtype=np.float32)
+    origins = np.empty_like(xyz, dtype=np.float32)
+    for group in np.unique(offsets_ns // bin_ns):
+        mask = offsets_ns // bin_ns == group
+        stamp_ns = start_ns + int(np.mean(offsets_ns[mask]))
+        translation, quat = pose_at(stamp_ns)
+        points[mask] = transform_points(body[mask], translation, quat)
+        origins[mask] = transform_points([sensor_translation], translation, quat)[0]
+    return points, origins
+
+
 class OccupancyMap:
     def __init__(self, library=None):
         self.lib = ct.CDLL(str(library or Path(__file__).parent / "build/libcat_octomap.so"))
@@ -112,7 +207,9 @@ class OccupancyMap:
         self.lib.cat_size.argtypes = [ct.c_void_p]
         self.lib.cat_size.restype = ct.c_size_t
         self.lib.cat_error.restype = ct.c_char_p
-        self.lib.cat_insert.argtypes = [ct.c_void_p, floatp, bytep, ct.c_size_t, floatp, ct.c_double]
+        self.lib.cat_insert.argtypes = [ct.c_void_p, floatp, bytep, ct.c_size_t, floatp,
+                                       ct.c_size_t, ct.c_double, ct.c_double]
+        self.lib.cat_prune.argtypes = [ct.c_void_p, doublep, doublep, ct.c_double, ct.c_double]
         self.lib.cat_export.argtypes = [ct.c_void_p, doublep, ct.c_int, ct.c_int, ct.c_int,
                                        bytep, ct.c_size_t]
         self.handle = self.lib.cat_create(RESOLUTION)
@@ -135,13 +232,26 @@ class OccupancyMap:
         if result != 0:
             raise RuntimeError("OctoMap: " + self.lib.cat_error().decode())
 
-    def insert(self, xyz, hits, sensor_origin, max_range=2.5):
+    def insert(self, xyz, hits, sensor_origin, max_range=2.5, observed_at=None):
         xyz = np.ascontiguousarray(xyz, dtype=np.float32)
         hits = np.ascontiguousarray(hits, dtype=np.uint8)
         sensor_origin = np.ascontiguousarray(sensor_origin, dtype=np.float32)
-        if xyz.ndim != 2 or xyz.shape[1] != 3 or hits.shape != (len(xyz),) or sensor_origin.shape != (3,):
+        if (xyz.ndim != 2 or xyz.shape[1] != 3 or hits.shape != (len(xyz),)
+                or sensor_origin.shape not in ((3,), (len(xyz), 3))):
             raise ValueError("bad integration array shapes")
-        self._check(self.lib.cat_insert(self.handle, xyz, hits, len(xyz), sensor_origin, max_range))
+        self._check(self.lib.cat_insert(self.handle, xyz, hits, len(xyz), sensor_origin,
+                                       1 if sensor_origin.ndim == 1 else len(xyz), max_range,
+                                       time.monotonic() if observed_at is None else observed_at))
+
+    def prune(self, origin, now, ttl=30.0):
+        origin = np.ascontiguousarray(origin, dtype=np.float64)
+        upper = np.ascontiguousarray(origin + np.asarray(SHAPE)*RESOLUTION, dtype=np.float64)
+        if origin.shape != (3,):
+            raise ValueError("bad prune origin")
+        result = self.lib.cat_prune(self.handle, origin, upper, now, ttl)
+        if result < 0:
+            self._check(result)
+        return result
 
     def export(self, origin):
         origin = np.ascontiguousarray(origin, dtype=np.float64)

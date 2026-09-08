@@ -117,6 +117,48 @@ class NativeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.tree.export([1])
 
+    def test_close_hit_under_old_five_cm_native_limit(self):
+        self.tree.insert([[.05, .02, .82]], [1], self.sensor)
+        self.assertEqual(self.cell(self.tree.export(self.origin), [.05, .02, .82]), 2)
+
+    def test_cell_expiry_does_not_reset_reobserved_obstacles(self):
+        self.tree.insert([[1.02, .02, .82], [.02, 1.02, .82]], [1, 1], self.sensor, observed_at=0)
+        self.tree.insert([[1.02, .02, .82]], [1], self.sensor, observed_at=20)
+        self.tree.prune(self.origin, now=31, ttl=30)
+        grid = self.tree.export(self.origin)
+        self.assertEqual(self.cell(grid, [1.02, .02, .82]), 2)
+        self.assertEqual(self.cell(grid, [.02, 1.02, .82]), 0)  # unknown, NOT free
+
+    def test_prune_outside_window_preserves_overlap(self):
+        self.tree.insert([[1.02, .02, .82], [.02, 1.02, .82]], [1, 1], self.sensor, observed_at=1)
+        self.tree.prune([.5, -2.56, 0], now=2)
+        grid = self.tree.export(self.origin)
+        self.assertEqual(self.cell(grid, [1.02, .02, .82]), 2)
+        self.assertEqual(self.cell(grid, [.02, 1.02, .82]), 0)
+
+    def test_per_point_origin_ray_does_not_clear_unobserved_space(self):
+        self.tree.insert([[1.02, .02, .82], [1.02, 1.02, .82]], [1, 1],
+                         [[.02, .02, .82], [.02, 1.02, .82]])
+        grid = self.tree.export(self.origin)
+        self.assertEqual(self.cell(grid, [.5, 1.02, .82]), 1)
+        self.assertEqual(self.cell(grid, [.5, .5, .82]), 0)
+
+    def test_expired_cell_restarts_with_unknown_prior(self):
+        for _ in range(5):
+            self.tree.insert([[1.02, .02, .82]], [1], self.sensor, observed_at=0)
+        self.tree.prune(self.origin, now=31, ttl=30)
+        self.tree.insert([[1.02, .02, .82]], [0], self.sensor, observed_at=32)
+        self.assertEqual(self.cell(self.tree.export(self.origin), [1.02, .02, .82]), 1)
+
+    def test_compaction_retains_recent_obstacle(self):
+        old = [[.06 + .04*x, .06 + .04*y, .82] for x in range(35) for y in range(35)]
+        self.tree.insert(old, np.ones(len(old)), self.sensor, observed_at=0)
+        self.tree.insert([[.22, .22, .82]], [1], self.sensor, observed_at=20)
+        removed = self.tree.prune(self.origin, now=31, ttl=30)
+        self.assertGreater(removed, 1000)
+        self.assertEqual(self.cell(self.tree.export(self.origin), [.22, .22, .82]), 2)
+        self.assertEqual(self.cell(self.tree.export(self.origin), [1.02, 1.02, .82]), 0)
+
 
 class NoMotionTests(unittest.TestCase):
     def test_no_policy_sdk_control_or_tf_publisher(self):

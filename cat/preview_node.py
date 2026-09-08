@@ -1,45 +1,47 @@
 #!/usr/bin/env python3
-"""Perception-only CAT preview. Publishes visualization under /g1_cat ONLY."""
+"""Disarmed CAT perception: raw timed LiDAR, existing SLAM poses, no motion."""
 import json
 import os
 from pathlib import Path
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from rclpy.time import Time
+from livox_ros_driver2.msg import CustomMsg
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import String
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker
 from tf2_ros import Buffer, TransformListener
 
-from perception_core import (OccupancyMap, SHAPE, RESOLUTION, cat_preprocess, centers,
-                  cloud_xyz, grid_origin, rotation_matrix, transform_points)
+from perception_core import (OccupancyMap, SHAPE, RESOLUTION, Scan, ScanBuffer,
+                             cat_preprocess, centers, deskew_livox, grid_origin,
+                             livox_points, rotation_matrix, transform_points)
 
-CLOUD_TOPICS = ("input_cloud", "ground_points", "obstacle_points", "occupancy_raw", "occupancy_cat")
+CLOUD_TOPICS = ("input_cloud", "ground_points", "obstacle_points", "nearfield_points",
+                "occupancy_raw", "occupancy_cat")
 
 
-def stamp_seconds(stamp):
-    return stamp.sec + stamp.nanosec * 1e-9
+def stamp_ns(stamp):
+    return stamp.sec * 1000000000 + stamp.nanosec
 
 
 class CatPreview(Node):
     def __init__(self):
-        # Disable implicit parameter service and rosout publishers as well.
-        # Foxy's Python TransformListener subscribes to relative 'tf' topics.
-        # Keep our outputs namespaced, but read the existing global SLAM TF.
-        # These node-local remaps also apply when launched outside Docker.
+        # Foxy's listener uses relative names. Only its INPUTS are remapped.
         super().__init__("cat_perception_preview", namespace="g1_cat",
                          cli_args=["--ros-args", "-r", "tf:=/tf", "-r", "tf_static:=/tf_static"],
                          enable_rosout=False, start_parameter_services=False)
-        defaults = {"input_topic": "/g1_slam/cloud_registered_body", "fixed_frame": "map",
-                    "source_frame": "body", "floor_z": 0.0, "ground_cutoff": 0.10,
+        defaults = {"input_topic": "/livox/lidar", "fixed_frame": "map",
+                    "source_frame": "livox_frame", "floor_z": 0.0, "ground_cutoff": 0.10,
                     "rate_hz": 1.0, "max_points": 20000, "max_range": 2.5,
-                    "max_receive_age": 0.5, "max_tf_delta": 0.25,
-                    "map_reset_seconds": 10.0, "max_octomap_nodes": 1000000,
+                    "min_range": 0.0, "max_receive_age": 1.5, "max_output_age": 2.0,
+                    "display_hold_seconds": 3.0, "cell_ttl_seconds": 30.0,
+                    "max_octomap_nodes": 1000000,
                     "sensor_origin_body": [-0.011, -0.02329, 0.04412],
                     "snapshot_directory": "/data", "snapshot_every": 5,
                     "arm_token": "/run/g1_nav/g1_motion_armed"}
@@ -50,38 +52,46 @@ class CatPreview(Node):
         self.tree = OccupancyMap()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
-        self.subscription = self.create_subscription(PointCloud2, self.cfg["input_topic"],
-                                                       self.receive, qos)
-        # Reliable publishers also serve best-effort readers; tiny queue, 1 Hz.
+        qos = QoSProfile(depth=2, reliability=QoSReliabilityPolicy.BEST_EFFORT)
+        self.subscription = self.create_subscription(
+            CustomMsg, self.cfg["input_topic"], self.receive, qos)
         self.cloud_pubs = {name: self.create_publisher(PointCloud2, "/g1_cat/" + name, 1)
                            for name in CLOUD_TOPICS}
         self.roi_pub = self.create_publisher(Marker, "/g1_cat/roi", 1)
         self.status_pub = self.create_publisher(String, "/g1_cat/diagnostics", 1)
-        self.latest = None
-        self.last_stamp = None
-        self.last_origin = None
+        self.scans = ScanBuffer()
+        self.last_stamp_ns = -1
+        self.generation = 0
         self.last_pose = None
+        self.last_origin = None
+        self.last_good_received = None
         self.reset_time = time.monotonic()
+        self.input_error = None
         self.sequence = 0
         self.last_status = None
         self.last_report_time = 0.0
-        self.timer = self.create_timer(1.0 / self.cfg["rate_hz"], self.tick)
-        print("CAT PERCEPTION ONLY: no SDK, policy, shared memory, TF or motion publishers.", flush=True)
+        # One bounded processing task, independent of the ROS receive loop.
+        # Avoid Foxy's Python MultiThreadedExecutor ready-callback contention.
+        self.worker = ThreadPoolExecutor(max_workers=1)
+        self.pending = None
+        self.timer = self.create_timer(1.0 / self.cfg["rate_hz"], self.schedule)
+        print("CAT PERCEPTION ONLY: raw LiDAR, no SDK, policy, TF or motion publishers.", flush=True)
 
     def validate_config(self):
         c = self.cfg
-        # This adapter's calibrated origin is for FAST-LIO's existing body cloud.
-        if c["input_topic"] != "/g1_slam/cloud_registered_body" or c["source_frame"] != "body" or c["fixed_frame"] != "map":
-            raise ValueError("this preview requires the existing body cloud and floor-aligned map")
+        if c["input_topic"] != "/livox/lidar" or c["source_frame"] != "livox_frame" or c["fixed_frame"] != "map":
+            raise ValueError("this adapter requires G1 raw Livox data and floor-aligned map TF")
         bounds = {"rate_hz": (0.1, 2.0), "max_points": (100, 50000),
-                  "max_range": (0.2, 2.5), "ground_cutoff": (0.0, 0.3),
-                  "max_receive_age": (0.05, 1.0), "max_tf_delta": (0.01, 0.5),
-                  "map_reset_seconds": (1.0, 30.0), "max_octomap_nodes": (1000, 1000000),
-                  "snapshot_every": (1, 60)}
+                  "max_range": (0.2, 2.5), "min_range": (0.0, 0.5),
+                  "ground_cutoff": (0.0, 0.3), "max_receive_age": (0.1, 2.0),
+                  "max_output_age": (0.2, 3.0), "display_hold_seconds": (1.0, 5.0),
+                  "cell_ttl_seconds": (5.0, 60.0),
+                  "max_octomap_nodes": (1000, 1000000), "snapshot_every": (1, 60)}
         for key, (low, high) in bounds.items():
             if not np.isfinite(c[key]) or not low <= c[key] <= high:
                 raise ValueError("invalid " + key)
+        if not c["max_receive_age"] < c["max_output_age"] < c["display_hold_seconds"]:
+            raise ValueError("require receive age < output age < stale-display hold timeout")
         if not np.isfinite(c["floor_z"]) or abs(c["floor_z"]) > 10:
             raise ValueError("invalid floor_z")
         if abs(c["floor_z"]/RESOLUTION - round(c["floor_z"]/RESOLUTION)) > 1e-6:
@@ -90,13 +100,28 @@ class CatPreview(Node):
         if origin.shape != (3,) or not np.isfinite(origin).all() or np.linalg.norm(origin) > 0.2:
             raise ValueError("invalid LiDAR origin in IMU/body")
 
-    def receive(self, cloud):
-        self.latest = (cloud, time.monotonic())
+    def receive(self, message):
+        received = time.monotonic()
+        start = stamp_ns(message.header.stamp)
+        count = len(message.points)
+        if (message.header.frame_id != self.cfg["source_frame"] or start <= 0
+                or not 0 < count <= 100000 or count != message.point_num):
+            self.input_error = "invalid raw packet frame, timestamp or size"
+            return
+        span = max(p.offset_time for p in message.points)
+        if span > 200000000:
+            self.input_error = "raw packet duration exceeds 200 ms"
+            return
+        self.scans.append(Scan(message, received, start, start + span))
+        self.input_error = None
+
+    def schedule(self):
+        if self.pending is None or self.pending.done():
+            self.pending = self.worker.submit(self.tick)
 
     def publish_cloud(self, name, points, stamp):
         msg = PointCloud2()
-        msg.header.frame_id = "map"
-        msg.header.stamp = stamp
+        msg.header.frame_id, msg.header.stamp = "map", stamp
         msg.height, msg.width = 1, len(points)
         msg.fields = [PointField(name=n, offset=i*4, datatype=7, count=1)
                       for i, n in enumerate(("x", "y", "z"))]
@@ -106,9 +131,9 @@ class CatPreview(Node):
         self.cloud_pubs[name].publish(msg)
 
     def report(self, state, **details):
-        # Preview validity is NOT a permission to move or proof of localization.
         data = dict(state=state, perception_only=True, motion_enabled=False,
-                    policy_ready=False, sequence=self.sequence,
+                    policy_ready=False, data_valid=(state == "PREVIEW_OK"),
+                    sequence=self.sequence, input_topic=self.cfg["input_topic"],
                     frame="map", shape=list(SHAPE), resolution=RESOLUTION, **details)
         message = String()
         message.data = json.dumps(data, sort_keys=True, allow_nan=False)
@@ -118,9 +143,18 @@ class CatPreview(Node):
             self.last_report_time = time.monotonic()
         self.last_status = state
 
-    def invalidate(self, reason):
+    def invalidate(self, reason, hard=False):
+        # A short TF/input gap does not erase observations or pretend to be fresh.
+        # Existing cloud timestamps remain unchanged; amber ROI labels a held view.
+        age = (time.monotonic() - self.last_good_received
+               if self.last_good_received is not None else None)
+        if not hard and age is not None and age < self.cfg["display_hold_seconds"]:
+            self.publish_roi(self.last_origin, self.get_clock().now().to_msg(), stale=True)
+            self.report("HOLDING_STALE", reason=reason, display_age_s=age)
+            return
         self.tree.reset()
-        self.last_origin = self.last_pose = None
+        self.last_pose = self.last_origin = None
+        self.last_good_received = None
         self.reset_time = time.monotonic()
         stamp = self.get_clock().now().to_msg()
         for name in CLOUD_TOPICS:
@@ -131,122 +165,136 @@ class CatPreview(Node):
         self.roi_pub.publish(marker)
         self.report("WAITING_OR_INVALID", reason=reason)
 
-    def lookup(self, cloud):
-        # NDT/FAST-LIO TF uses sensor time, not necessarily wall time. First try
-        # the scan stamp. If NDT lags, allow the latest common time ONLY within
-        # the configured bound; never substitute an identity transform.
-        stamp = Time.from_msg(cloud.header.stamp)
-        mode = "scan_time"
-        try:
-            result = self.tf_buffer.lookup_transform("map", "body", stamp)
-        except Exception:
-            result = self.tf_buffer.lookup_transform("map", "body", Time())
-            mode = "latest_bounded"
-        delta = stamp_seconds(cloud.header.stamp) - stamp_seconds(result.header.stamp)
-        if abs(delta) > self.cfg["max_tf_delta"]:
-            raise ValueError("map/body TF is stale relative to scan (%.3f s)" % delta)
+    def pose_at(self, ns):
+        result = self.tf_buffer.lookup_transform("map", "body", Time(nanoseconds=int(ns)))
         t, q = result.transform.translation, result.transform.rotation
-        return [t.x, t.y, t.z], [q.x, q.y, q.z, q.w], mode, delta
+        return [t.x, t.y, t.z], [q.x, q.y, q.z, q.w]
+
+    def select_scan(self, now):
+        scans, generation = self.scans.snapshot()
+        if generation != self.generation:
+            self.invalidate("sensor timestamp moved backwards", hard=True)
+            self.last_stamp_ns = -1
+            self.generation = generation
+        if not scans:
+            raise ValueError(self.input_error or "waiting for raw LiDAR")
+        if now - scans[-1].received > self.cfg["max_receive_age"]:
+            raise ValueError("no fresh raw LiDAR receive")
+        latest_tf = self.tf_buffer.lookup_transform("map", "body", Time())
+        selected = ScanBuffer.select(scans, now, self.cfg["max_receive_age"],
+                                     self.last_stamp_ns, stamp_ns(latest_tf.header.stamp))
+        if selected is None:
+            raise ValueError("waiting for sensor-time TF covering a fresh complete scan")
+        # Validate both ends; all subsequent bins are within this exact interval.
+        self.pose_at(selected.start_ns)
+        self.pose_at(selected.end_ns)
+        return selected
 
     def tick(self):
         started = time.monotonic()
+        timing = {}
+        mark = started
+        def stage(name):
+            nonlocal mark
+            current = time.monotonic()
+            timing[name] = round((current-mark)*1000, 2)
+            mark = current
         try:
             if Path(self.cfg["arm_token"]).exists():
-                self.invalidate("motion arm token exists; preview paused (does NOT disarm robot)")
+                self.invalidate("motion arm token exists; preview paused (does NOT disarm robot)", hard=True)
                 return
-            if self.latest is None:
-                self.invalidate("waiting for " + self.cfg["input_topic"])
-                return
-            cloud, received = self.latest
-            age = started - received
-            stamp = stamp_seconds(cloud.header.stamp)
-            if age > self.cfg["max_receive_age"] or stamp <= 0:
-                raise ValueError("stale/invalid cloud timestamp or no fresh receive")
-            if self.last_stamp is not None and stamp <= self.last_stamp:
-                if stamp < self.last_stamp:
-                    self.last_stamp = stamp  # recovery requires a NEW advancing scan
-                raise ValueError("cloud timestamp stopped or went backwards")
-            if cloud.header.frame_id != self.cfg["source_frame"]:
-                raise ValueError("unexpected source frame: " + cloud.header.frame_id)
-            translation, quat, tf_mode, tf_delta = self.lookup(cloud)
-            xyz = cloud_xyz(cloud, self.cfg["max_points"])
+            scan = self.select_scan(started)
+            stage("select_ms")
+            xyz, offsets, info = livox_points(scan.message, self.cfg["max_points"], self.cfg["min_range"])
+            stage("decode_ms")
             if len(xyz) < 10:
-                raise ValueError("too few finite input points")
-            points = transform_points(xyz, translation, quat)
+                raise ValueError("too few valid raw returns")
+            points, origins = deskew_livox(xyz, offsets, scan.start_ns, self.pose_at,
+                                           self.cfg["sensor_origin_body"])
+            translation, quat = self.pose_at(scan.end_ns)
             sensor = transform_points([self.cfg["sensor_origin_body"]], translation, quat)[0]
             origin = grid_origin(translation, self.cfg["floor_z"])
+            stage("deskew_ms")
             reset_reason = "none"
-            if started - self.reset_time > self.cfg["map_reset_seconds"]:
-                reset_reason = "bounded_history_expired"
-            if self.last_origin is not None and np.linalg.norm(origin[:2]-self.last_origin[:2]) > 1.0:
-                reset_reason = "local_window_moved"
             if self.last_pose is not None:
                 old_t, old_r = self.last_pose
                 angle = np.arccos(np.clip((np.trace(old_r.T @ rotation_matrix(quat))-1)/2, -1, 1))
                 if np.linalg.norm(np.asarray(translation)-old_t) > 0.5 or angle > np.deg2rad(30):
+                    self.tree.reset()
+                    self.reset_time = started
                     reset_reason = "large_pose_change"
-            if reset_reason != "none":
-                self.tree.reset()
-                self.reset_time = started
-                self.last_origin = None
-            if self.last_origin is None:
-                self.last_origin = origin.copy()
-            self.last_pose = (np.asarray(translation), rotation_matrix(quat))
-            heights = points[:, 2] - self.cfg["floor_z"]
-            ground = heights < self.cfg["ground_cutoff"]
-            self.tree.insert(points, ~ground, sensor, self.cfg["max_range"])
+            ground = points[:, 2] - self.cfg["floor_z"] < self.cfg["ground_cutoff"]
+            # Bound storage before tracing: rays outside the published volume
+            # must not repeatedly allocate cells only to retire them afterward.
+            removed = self.tree.prune(origin, started, self.cfg["cell_ttl_seconds"])
+            self.tree.insert(points, ~ground, origins, self.cfg["max_range"], observed_at=started)
+            stage("integrate_ms")
             if self.tree.nodes > self.cfg["max_octomap_nodes"]:
-                raise ValueError("OctoMap node budget exceeded; history cleared")
+                self.invalidate("OctoMap node budget exceeded", hard=True)
+                return
             grid = self.tree.export(origin)
             raw = grid == 2
+            stage("export_ms")
             processed = cat_preprocess(raw)
-            within = (np.linalg.norm(points-sensor, axis=1) <= self.cfg["max_range"])
+            stage("morphology_ms")
+            if time.monotonic() - scan.received > self.cfg["max_output_age"]:
+                raise ValueError("processing exceeded maximum output age")
+            if self.scans.snapshot()[1] != self.generation or Path(self.cfg["arm_token"]).exists():
+                self.invalidate("clock reset or arm token changed during processing", hard=True)
+                return
+            self.last_pose = (np.asarray(translation), rotation_matrix(quat))
+            self.last_origin = origin.copy()
+            self.last_good_received = scan.received
+            self.last_stamp_ns = scan.start_ns
+            self.sequence += 1
+            ranges = np.linalg.norm(xyz, axis=1)
+            within = (ranges <= self.cfg["max_range"])
             within &= (points >= origin).all(axis=1) & (points < origin + np.array(SHAPE)*RESOLUTION).all(axis=1)
             now_msg = self.get_clock().now().to_msg()
             for name, values in (("input_cloud", points[within]), ("ground_points", points[within & ground]),
                                  ("obstacle_points", points[within & ~ground]),
+                                 ("nearfield_points", points[within & (ranges < 0.5)]),
                                  ("occupancy_raw", centers(raw, origin)),
                                  ("occupancy_cat", centers(processed, origin))):
                 self.publish_cloud(name, values, now_msg)
             self.publish_roi(origin, now_msg)
-            self.last_stamp = stamp
-            self.sequence += 1
-            details = dict(origin=origin.tolist(), sensor_origin=sensor.tolist(),
-                           input_points=cloud.width*cloud.height, sampled_points=len(xyz),
+            details = dict(info, origin=origin.tolist(), sensor_origin=sensor.tolist(),
                            obstacle_returns=int((within & ~ground).sum()),
                            ground_returns=int((within & ground).sum()),
+                           nearfield_in_volume=int((within & (ranges < 0.5)).sum()),
                            occupied_raw=int(raw.sum()), occupied_cat=int(processed.sum()),
                            cat_added=int((processed & ~raw).sum()), cat_removed=int((raw & ~processed).sum()),
                            known_free=int((grid == 1).sum()), unknown=int((grid == 0).sum()),
-                           source_stamp=stamp, receive_age_s=age, tf_mode=tf_mode, tf_delta_s=tf_delta,
-                           wall_minus_sensor_s=self.get_clock().now().nanoseconds*1e-9-stamp,
-                           octomap_nodes=self.tree.nodes, history_age_s=started-self.reset_time,
-                           history_reset=reset_reason)
+                           source_stamp=scan.start_ns*1e-9, source_end_stamp=scan.end_ns*1e-9,
+                           receive_age_s=started-scan.received, tf_mode="point_time_10ms",
+                           min_range=self.cfg["min_range"], octomap_nodes=self.tree.nodes,
+                           cells_expired_or_outside=removed, cell_ttl_s=self.cfg["cell_ttl_seconds"],
+                           history_age_s=started-self.reset_time, history_reset=reset_reason)
             if self.cfg["snapshot_directory"] and self.sequence % self.cfg["snapshot_every"] == 0:
                 directory = Path(self.cfg["snapshot_directory"])
                 directory.mkdir(parents=True, exist_ok=True)
-                # One bounded latest snapshot, never a policy SHM buffer.
-                target = directory / "latest.npz"
-                temporary = directory / "latest.tmp.npz"
+                target, temporary = directory / "latest.npz", directory / "latest.tmp.npz"
                 np.savez_compressed(str(temporary), occupancy_state=grid,
                                     cat_occupancy=processed.astype(np.uint8), origin=origin,
-                                    resolution=RESOLUTION, source_stamp=stamp,
+                                    resolution=RESOLUTION, source_stamp=scan.start_ns*1e-9,
                                     metadata=json.dumps(details))
                 os.replace(str(temporary), str(target))
             details["processing_ms"] = (time.monotonic()-started)*1000
-            if time.monotonic() - received > 1.5:
-                raise ValueError("processing output too old; decrease max_points")
+            details["output_receive_age_s"] = time.monotonic()-scan.received
+            stage("publish_snapshot_ms")
+            details["timings"] = timing
             self.report("PREVIEW_OK", **details)
         except Exception as exc:
             self.invalidate(type(exc).__name__ + ": " + str(exc))
 
-    def publish_roi(self, origin, stamp):
+    def publish_roi(self, origin, stamp, stale=False):
         marker = Marker()
         marker.header.frame_id, marker.header.stamp = "map", stamp
         marker.ns, marker.id, marker.type, marker.action = "cat_roi", 0, Marker.LINE_LIST, Marker.ADD
         marker.pose.orientation.w = 1.0
         marker.scale.x = 0.015
-        marker.color.g, marker.color.b, marker.color.a = 0.8, 1.0, 0.8
+        marker.color.r = 1.0 if stale else 0.0
+        marker.color.g, marker.color.b, marker.color.a = 0.8, 0.0 if stale else 1.0, 0.8
         marker.lifetime.sec = 3
         size = np.array(SHAPE)*RESOLUTION
         for axis in range(3):
@@ -270,10 +318,14 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        node.invalidate("preview stopped")
+        node.timer.cancel()
+        node.worker.shutdown(wait=True)
+        if rclpy.ok():
+            node.invalidate("preview stopped", hard=True)
         node.tree.close()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

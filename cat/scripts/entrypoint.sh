@@ -2,6 +2,7 @@
 set -eo pipefail
 # Foxy's generated setup files do not support nounset.
 source /opt/ros/foxy/setup.bash
+source /opt/cat/messages/setup.bash
 set -u
 case "${1:-validate}" in
   validate)

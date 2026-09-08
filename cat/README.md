@@ -57,7 +57,8 @@ Add these layers one at a time:
 
 | Topic | Meaning |
 | --- | --- |
-| `/g1_cat/input_cloud` | Current nearby deskewed returns in map coordinates |
+| `/g1_cat/input_cloud` | Raw LiDAR returns aligned using point times and SLAM poses |
+| `/g1_cat/nearfield_points` | Valid returns closer than 0.5 m to the LiDAR, inside the volume |
 | `/g1_cat/ground_points` | Returns below floor + 10 cm, not obstacle hits |
 | `/g1_cat/obstacle_points` | Current non-ground obstacle returns |
 | `/g1_cat/occupancy_raw` | Actual occupied OctoMap cell centers, unmodified |
@@ -84,9 +85,11 @@ Do not arm anything based on this preview.
 ## Data flow and differences from upstream
 
 ```text
-existing Livox driver -> existing FAST-LIO deskewed body cloud
-  + existing sensor-time map -> world -> camera_init -> body TF
-    -> map-frame returns, LiDAR-origin ray tracing, ground split
+existing /livox/lidar CustomMsg (raw points and point timestamps)
+  + existing SLAM sensor-time map -> world -> camera_init -> body TF
+    -> bounded scan queue; newest scan fully covered by TF
+      -> calibrated raw-LiDAR-to-body transform + 10 ms point-time pose bins
+        -> map-frame returns, moving-LiDAR ray origins, ground split
       -> OctoMap (.04 m; hit .7 / miss .4; clamp .12 .. .97)
         -> bounded XYZ grid [128,128,35]
           -> upstream CAT morphology / vertical fills
@@ -101,9 +104,18 @@ Adapter details and intentional limitations:
 
 - Uses our already floor-aligned `map` instead of CAT's separate RANSAC
   `floor_init`. Does **not** rerun its driver/SLAM, flip gravity again, or use
-  the planar navigation-base frame. FAST-LIO has already applied LiDAR-to-IMU
-  rotation. Ray origin uses the existing LiDAR translation in body:
-  `[-0.011, -0.02329, 0.04412]` m.
+  the planar navigation-base frame. The raw cloud has NOT had FAST-LIO's
+  extrinsics applied, so CAT applies the same `diag(1,-1,-1)` rotation and
+  `[-0.011, -0.02329, 0.04412]` m translation exactly once. This corrects the
+  G1 vendor cloud/IMU axis mismatch without using the legacy visualization TF.
+- CAT's `min_range: 0.0` means **no software blind-distance cutoff**. Zero-length,
+  nonfinite, invalid-tag/line and malformed timestamp returns are still rejected.
+  Zero returns never clear rays either. Close returns (<0.5 m) take precedence
+  over farther points if sampling is needed. This does not overcome hardware
+  minimum range, occlusion, or the LiDAR's field of view. FAST-LIO and its
+  registered-cloud topics retain their tested `blind: 0.5`; only CAT bypasses
+  that filter by reading the vendor stream directly. Robot-body returns may
+  now be visible: no validated body mask has been guessed or silently applied.
 - CAT's layout is XYZ, map-axis aligned, 4 cm cells, floor-relative Z 0..1.4 m.
   The XY window follows the current body position and snaps to voxel boundaries.
   Heights above 1.4 m are **not represented**. Below-10-cm obstacles are treated
@@ -121,15 +133,26 @@ Adapter details and intentional limitations:
   Z-index 20 and downward fill below 5. These operations can erase thin/boundary
   obstacles and invent filled regions. Diagnostics report additions/removals.
   No fake corner obstacles are added on empty input.
-- Preview runs at 1 Hz, samples at most 20,000 points per scan. This is not
-  the 50 Hz control/observation loop. History resets every 10 seconds, on large
-  pose/window changes, stale data, or a memory guard. This deliberately bounds
-  memory/old obstacles during the experiment; it is not a persistent world map.
-- TF is evaluated at sensor time; a latest-common-time fallback is allowed only
-  within 0.25 s of the input scan, explicitly reported. Live receive age is
-  independently checked. Missing/stale data clears output and reports invalid.
-  Output clouds are already in map coordinates, stamped at publication for
-  Foxglove. Source timestamps and clock offset remain visible in diagnostics.
+- Preview runs at 1 Hz with at most 20,000 valid returns. One bounded processing
+  worker runs independently of the ROS input/TF receive loop (no concurrent
+  overlapping map updates). The 16-scan queue selects the newest complete scan
+  covered by TF, received less than 1.5 seconds ago. There is no latest-pose
+  fallback: each 10 ms point-time bin requires its own full map-to-body pose.
+  This uses interpolation of SLAM poses, not FAST-LIO's IMU-integrated deskewer;
+  it is an approximation that still requires testing under movement.
+- No periodic whole-map reset. Observed cells persist and new free rays clear
+  obstacles probabilistically. Cells not observed for 30 seconds or outside the
+  rolling window become **unknown**, not free. Native storage is compacted while
+  preserving retained cells' probabilities. This avoids an OctoMap 1.9.3
+  per-node-deletion assertion without modifying any host library. Major pose
+  jumps, sensor-clock resets, long data loss and memory faults still clear history.
+- Before publishing a new result, input age must be below 2 seconds. Short data
+  gaps hold the last visualization, with **amber ROI**, `HOLDING_STALE` and
+  `data_valid=false`; cloud timestamps are NOT refreshed to disguise stale data.
+  After 3 seconds since the last accepted input was received, output/history
+  clear. Arm-token appearance clears immediately. Only `PREVIEW_OK` sets
+  `data_valid=true`; `policy_ready` remains false in all states. No stale held
+  visualization should ever be connected as an actionable policy observation.
 - Foxy's Python TF listener uses relative topic names. The CAT node explicitly
   remaps its TF inputs to `/tf` and `/tf_static`; `/g1_cat/tf*` are not inputs
   and must not be populated with fabricated transforms to work around an error.
@@ -177,3 +200,22 @@ node. Do not install the upstream training environment on the robot.
    review and explicit operator approval. Never run upstream `deploy_real_gf.py`
    or its low-level controller as a supposed disarmed test: even upstream debug
    paths can publish low-level commands.
+
+## Updating the preview
+
+After source/config updates, rebuild and replace **only** CAT:
+
+```bash
+cd ~/humanoid_navigation_cat
+git pull --ff-only
+bash cat/scripts/container.sh stop
+bash cat/scripts/build.sh
+bash cat/scripts/container.sh validate
+bash cat/scripts/container.sh start
+bash cat/scripts/container.sh logs
+```
+
+SLAM/localization and rosbridge stay running. Inspect `/g1_cat/nearfield_points`
+and compare `nearfield_available`, `nearfield_retained`, `nearfield_in_volume`
+with `/g1_cat/occupancy_raw`; CAT morphology and the unchanged height cutoff
+can still remove points from the final processed obstacle grid.

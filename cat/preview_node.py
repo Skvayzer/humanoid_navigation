@@ -16,7 +16,7 @@ from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker
 from tf2_ros import Buffer, TransformListener
 
-from core import (OccupancyMap, SHAPE, RESOLUTION, cat_preprocess, centers,
+from perception_core import (OccupancyMap, SHAPE, RESOLUTION, cat_preprocess, centers,
                   cloud_xyz, grid_origin, rotation_matrix, transform_points)
 
 CLOUD_TOPICS = ("input_cloud", "ground_points", "obstacle_points", "occupancy_raw", "occupancy_cat")

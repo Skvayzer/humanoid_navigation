@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY vendor/unitree_cyclone/libddsc.so /usr/local/lib/libddsc.so
 COPY vendor/unitree_cyclone/librmw_cyclonedds_cpp.so /opt/ros/foxy/lib/librmw_cyclonedds_cpp.so
 RUN ln -s libddsc.so /usr/local/lib/libddsc.so.0 && ldconfig
-COPY cat/core.py cat/preview_node.py /opt/cat/
+COPY cat/perception_core.py cat/preview_node.py /opt/cat/
 COPY cat/config /opt/cat/config
 COPY cat/tests /opt/cat/tests
 COPY cat/upstream /opt/cat/upstream

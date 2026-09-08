@@ -4,7 +4,7 @@ Upstream: https://github.com/GalaxyGeneralRobotics/Click-and-Traverse
 
 Pinned commit: `866ba392f1c1e84b92ad75fa66550f26e8af8e48`
 
-`cat_preprocess` in `cat/core.py` adapts the morphology and vertical fill from
+`cat_preprocess` in `cat/perception_core.py` adapts the morphology and vertical fill from
 `deploy/scripts/exp_dis_pf/octomap_bridge.py`, licensed Apache-2.0 (see LICENSE).
 It preserves the 5x5x5 closing, two iterations, 3x3x3 neighbor test, upward
 fill from index 20 and downward fill below index 5. It removes import-time

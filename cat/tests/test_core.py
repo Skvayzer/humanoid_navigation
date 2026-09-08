@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 
-from core import (OccupancyMap, RESOLUTION, SHAPE, cat_preprocess, centers,
+from perception_core import (OccupancyMap, RESOLUTION, SHAPE, cat_preprocess, centers,
                   cloud_xyz, grid_origin, rotation_matrix, transform_points)
 
 
@@ -121,7 +121,7 @@ class NativeTests(unittest.TestCase):
 class NoMotionTests(unittest.TestCase):
     def test_no_policy_sdk_control_or_tf_publisher(self):
         root = Path(__file__).resolve().parents[1]
-        for filename in ("core.py", "preview_node.py"):
+        for filename in ("perception_core.py", "preview_node.py"):
             source = (root / filename).read_text()
             tree = ast.parse(source)
             imports = []

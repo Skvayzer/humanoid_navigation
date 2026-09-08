@@ -89,3 +89,9 @@ tail -n 80 "$HOME/g1_slam_runtime/logs/rosbridge/bridge.log"
 ```
 
 Adjust paths/container name if site.env overrides the defaults.
+
+For the deployed read-only load/drift monitor, run
+`./scripts/monitor_drift.sh 300 2` from the checkout. It samples CPU, memory,
+temperatures, network-drop counters and Fast-LIO effective-point warnings every
+two seconds for five minutes, writing a TSV under the dedicated logs directory.
+It sends no ROS or robot command.

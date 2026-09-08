@@ -8,6 +8,7 @@ This repository was copied read-only from the G1 on **2026-09-08**:
 - `~/bin`: the operator shortcuts actually used on the robot.
 - `~/rosbridge_runtime/python` and launcher: working Foxglove/rosbridge patches.
 - `~/livox_viz_ws/src` and launcher: standard point-cloud/IMU visualization.
+- `~/g1_slam_runtime/monitor_drift.sh`: read-only resource/drift logging utility.
 - `~/unitree_sdk2_python`: clean upstream checkout at
   `a035adeaa6f8ea171bef9a43e8477abb87a0b35e`, SDK version 1.0.1.
 - `~/cyclonedds_ws/src`: accompanying middleware source in the release archive.
@@ -15,6 +16,10 @@ This repository was copied read-only from the G1 on **2026-09-08**:
 No robot code, package installation, container, mode or process was changed while
 making this repository. Public packaging edits were made only in a fresh desktop
 checkout.
+
+Read-only `dpkg -V` checks reported no modified packaged files for host rosapi,
+rosbridge_server, rosbridge_library or rclpy. Their deployment-specific fixes are
+in the included Python overlay, not hidden edits to `/opt/ros`.
 
 The original tested X2 archive was
 `robotics_slam_nav_backup_20260713_111143.zip`, SHA-256

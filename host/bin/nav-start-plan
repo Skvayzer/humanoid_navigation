@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+
+"$G1_SLAM_PROJECT_DIR/host/bin/g1-motion-stop"
+name="$G1_SLAM_CONTAINER"
+if [[ "$(sudo docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null || true)" != true ]]; then
+  echo "SLAM/localization container is not running" >&2
+  exit 2
+fi
+sudo docker exec --detach "$name" /opt/g1_slam/nav/start_nav_planning.sh
+echo "Navigation preview requested; motion gateway DISARMED. Do not arm during preview."

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+name="$G1_SLAM_CONTAINER"
+deploy_dir="$G1_SLAM_PROJECT_DIR"
+
+echo "Keep the robot motionless while Fast-LIO initializes."
+
+if sudo docker container inspect "$name" >/dev/null 2>&1; then
+  state="$(sudo docker inspect --format '{{.State.Status}}' "$name")"
+  mode="$(sudo docker inspect --format '{{index .Config.Cmd 0}}' "$name")"
+  if [[ "$state" == "running" ]]; then
+    if [[ "$mode" == "mapping" ]]; then
+      echo "Map collection is already running: $name"
+      exit 0
+    fi
+    echo "Refusing to replace the running '$mode' container; stop it first." >&2
+    exit 3
+  fi
+  sudo docker rm "$name" >/dev/null
+fi
+
+cd "$deploy_dir"
+G1_SLAM_DETACH=1 exec ./scripts/run_container.sh mapping

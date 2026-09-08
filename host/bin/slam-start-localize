@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+name="$G1_SLAM_CONTAINER"
+deploy_dir="$G1_SLAM_PROJECT_DIR"
+map_name="${1:-${G1_SLAM_DEFAULT_MAP:-teaching_lab_aligned.pcd}}"
+
+if [[ "$map_name" != *.pcd ]]; then
+  map_name="${map_name}.pcd"
+fi
+if [[ ! "$map_name" =~ ^[A-Za-z0-9._-]+\.pcd$ ]]; then
+  echo "Map must be a simple .pcd filename under ~/g1_slam_runtime/maps." >&2
+  exit 2
+fi
+map_path="/data/maps/$map_name"
+host_map="$G1_SLAM_RUNTIME_DIR/maps/$map_name"
+if [[ ! -r "$host_map" ]]; then
+  echo "Localization map not found: $host_map" >&2
+  exit 2
+fi
+
+echo "Keep the robot motionless while Fast-LIO initializes."
+echo "NDT map: $host_map"
+
+if sudo docker container inspect "$name" >/dev/null 2>&1; then
+  state="$(sudo docker inspect --format '{{.State.Status}}' "$name")"
+  mode="$(sudo docker inspect --format '{{index .Config.Cmd 0}}' "$name")"
+  if [[ "$state" == "running" ]]; then
+    echo "Refusing to replace the running '$mode' container; stop it first." >&2
+    exit 3
+  fi
+  sudo docker rm "$name" >/dev/null
+fi
+
+cd "$deploy_dir"
+G1_SLAM_DETACH=1 exec ./scripts/run_container.sh localization "$map_path"

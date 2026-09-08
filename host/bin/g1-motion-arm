@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+runtime="$G1_SLAM_RUNTIME_DIR/nav"
+pid_file="$runtime/g1_motion_bridge.pid"
+arm_file="$runtime/g1_motion_armed"
+
+if [[ "${I_AM_SUPERVISING:-0}" != 1 ]]; then
+  echo "Refusing to arm. The operator must be at the robot with emergency control ready." >&2
+  echo "After YOU put the G1 into locomotion mode, run:" >&2
+  echo "  I_AM_SUPERVISING=1 g1-motion-arm" >&2
+  exit 2
+fi
+if [[ ! -r "$pid_file" ]]; then
+  echo "Motion gateway is not running. Run nav-start-safe first." >&2
+  exit 3
+fi
+pid="$(cat "$pid_file")"
+if [[ ! "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null; then
+  echo "Motion gateway process is not alive. Run nav-start-safe again." >&2
+  exit 3
+fi
+
+touch "$arm_file"
+echo "Motion gateway ARMED after a 1-second zero-command settling period."
+echo "Limits: forward 0.20 m/s, yaw 0.20 rad/s; reverse/lateral disabled; combined forward+steering enabled."
+echo "Verify live LiDAR, localization, local costmap and physical emergency stop before moving."
+echo "Emergency software stop: killnav  (or g1-motion-stop)"

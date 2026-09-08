@@ -1,0 +1,19 @@
+name: ARM64 container build
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/fetch_runtime.sh
+      - run: ./scripts/build_image.sh
+      - name: Offline import and ROS package validation (no robot connection)
+        run: |
+          sudo docker run --rm --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+            --tmpfs /data/logs:rw,nosuid,nodev,uid=1000,gid=1000 \
+            g1-slam-foxy:backup-20260713 validate

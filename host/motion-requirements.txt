@@ -1,0 +1,10 @@
+# Versions observed on the deployed G1, Python 3.8. Use a private venv.
+# NumPy comes from Ubuntu python3-numpy via --system-site-packages.
+cyclonedds==0.10.2
+rich-click==1.9.5
+rich==14.2.0
+click==8.1.8
+typing-extensions==4.13.2
+markdown-it-py==3.0.0
+Pygments==2.19.2
+mdurl==0.1.2

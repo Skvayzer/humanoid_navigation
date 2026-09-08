@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -u
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+runtime="$G1_SLAM_RUNTIME_DIR/nav"
+rm -f "$runtime/g1_motion_armed"
+echo "G1 motion gateway DISARMED; zero command requested"

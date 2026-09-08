@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+runtime="$G1_SLAM_RUNTIME_DIR/nav"
+logs="$G1_SLAM_RUNTIME_DIR/logs/nav"
+pid_file="$runtime/g1_motion_bridge.pid"
+arm_file="$runtime/g1_motion_armed"
+bridge="$G1_SLAM_PROJECT_DIR/host/g1_cmd_vel_bridge.py"
+
+mkdir -p "$runtime" "$logs"
+rm -f "$arm_file"
+if [[ -r "$pid_file" ]]; then
+  pid="$(cat "$pid_file")"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    echo "G1 motion gateway is already running DISARMED (pid $pid)"
+    exit 0
+  fi
+fi
+
+set +u
+source /opt/ros/foxy/setup.bash
+source "$G1_CYCLONE_WS/install/setup.bash"
+source "$G1_LIVOX_WS/install/setup.bash"
+set -u
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export CYCLONEDDS_URI="$G1_HOST_CYCLONEDDS_URI"
+export ROS_LOG_DIR="$logs/ros"
+mkdir -p "$ROS_LOG_DIR"
+
+nohup nice -n 5 "$G1_MOTION_PYTHON" "$bridge" >>"$logs/g1_motion_bridge.console.log" 2>&1 &
+pid=$!
+echo "$pid" > "$pid_file"
+echo "G1 motion gateway started DISARMED (pid $pid)."
+echo "It does not change the robot locomotion/FSM mode."

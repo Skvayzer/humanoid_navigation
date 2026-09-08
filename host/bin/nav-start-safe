@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+# Starting this command never arms motion and never changes the G1 motion mode.
+"$G1_SLAM_PROJECT_DIR/host/bin/g1-motion-bridge-start"
+
+name="$G1_SLAM_CONTAINER"
+if [[ "$(sudo docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null || true)" != true ]]; then
+  echo "SLAM/localization container is not running" >&2
+  exit 2
+fi
+if sudo docker exec "$name" sh -c 'test -r /data/logs/nav/planning_supervisor.pid && kill -0 "$(cat /data/logs/nav/planning_supervisor.pid)" 2>/dev/null'; then
+  echo "Navigation is already running. Motion gateway remains DISARMED."
+else
+  sudo docker exec --detach "$name" /opt/g1_slam/nav/start_nav_planning.sh
+  echo "Navigation start requested. Motion gateway remains DISARMED."
+fi
+echo "Inspect /g1_nav/cmd_vel_limited and /g1_nav/motion_bridge/armed before arming."

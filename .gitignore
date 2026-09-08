@@ -1,0 +1,27 @@
+# Runtime and private data are never part of the source repository.
+.env
+config/site.env
+artifacts/
+runtime/
+maps/
+*.pcd
+*.ply
+*.bag
+*.db3
+*.mcap
+*.log
+__pycache__/
+*.pyc
+.venv/
+build/
+install/
+log/
+logs/
+*.before*
+*.bak*
+vendor/open3d/
+vendor/unitree_cyclone/*.so*
+*.tar.gz
+*.zip
+core
+core.*

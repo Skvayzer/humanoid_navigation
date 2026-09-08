@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -u
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+runtime="$G1_SLAM_RUNTIME_DIR/nav"
+pid_file="$runtime/g1_motion_bridge.pid"
+if [[ -r "$pid_file" ]]; then pid="$(cat "$pid_file")"; else pid=""; fi
+if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then running=yes; else running=no; fi
+if [[ -f "$runtime/g1_motion_armed" ]]; then armed=yes; else armed=no; fi
+echo "gateway_running=$running armed=$armed"
+echo "limits: vx=0..0.20 m/s, vy=0, wz=+/-0.20 rad/s, watchdog=0.30 s"

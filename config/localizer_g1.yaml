@@ -1,0 +1,33 @@
+/**:
+  ros__parameters:
+    scan_topic: /g1_slam/cloud_registered
+    odom_topic: /g1_slam/odometry
+    map_frame: map
+    odom_frame: world
+    map_cloud_topic: /g1_slam/map_cloud
+    icp_max_dist: 0.5
+    min_fitness: 0.4
+    min_fitness_reloc: 0.4
+    max_rmse: 0.30
+    confidence_th: 0.7
+    max_init_dist_from_hint: 1.0
+    max_recovery_drift_from_prior: 0.4
+    relocalize_after_n_losses: 20
+    max_dpose_per_tick: 0.3
+    max_map_drift_rate: 0.15
+    drift_rate_speed_gain: 0.30
+    jump_fitness_margin: 0.08
+    max_ceiling_above_floor: 100.0
+    use_multi_scale_icp: true
+    multi_scale_voxels: [0.6, 0.4, 0.2]
+    track_multi_scale_voxels: [0.3, 0.15]
+    use_3d_icp: true
+    use_fpfh_ransac: false
+    use_kalman: true
+    kalman_process_var: 0.001
+    kalman_meas_var: 0.02
+    dis_updatemap: 3.5
+    local_map_radius: 10.0
+    loc_period: 0.4
+    freeze_after_init: true
+    initial_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

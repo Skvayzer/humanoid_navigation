@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+name="$G1_SLAM_CONTAINER"
+
+if ! sudo docker container inspect "$name" >/dev/null 2>&1; then
+  echo "SLAM container does not exist: $name"
+  exit 0
+fi
+
+mode="$(sudo docker inspect --format '{{index .Config.Cmd 0}}' "$name")"
+if [[ "$mode" != "localization" ]]; then
+  echo "Refusing localization stop: container mode is '$mode'." >&2
+  exit 3
+fi
+
+sudo docker rm -f "$name"

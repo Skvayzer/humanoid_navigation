@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -u
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+name="$G1_SLAM_CONTAINER"
+
+# Disarm the Unitree gateway before terminating Nav2. This is non-blocking; the
+# gateway observes the removed token on its next 10 Hz cycle and keeps sending
+# short-duration zero commands while navigation is stopped.
+"$G1_SLAM_PROJECT_DIR/host/bin/g1-motion-stop" >/dev/null 2>&1 || true
+
+if [[ "$(sudo docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null || true)" != true ]]; then
+  echo "navigation is already stopped (SLAM container is not running)"
+  exit 0
+fi
+sudo docker exec "$name" /opt/g1_slam/nav/stop_nav.sh || true

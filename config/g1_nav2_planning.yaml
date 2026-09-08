@@ -1,0 +1,172 @@
+# Foxy port of the tested X2 NavigateToPose stack. The controller output stays
+# isolated from Unitree locomotion behind the separately armed host gateway.
+/g1_nav/bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: g1_nav_base
+    odom_topic: /g1_nav/odom
+    bt_loop_duration: 50
+    default_server_timeout: 20
+    default_bt_xml_filename: /opt/g1_slam/nav/g1_nav2_bt.xml
+    enable_groot_monitoring: false
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_distance_traveled_condition_bt_node
+
+/g1_nav/planner_server:
+  ros__parameters:
+    use_sim_time: false
+    expected_planner_frequency: 2.0
+    planner_plugins: [GridBased]
+    GridBased:
+      plugin: nav2_navfn_planner/NavfnPlanner
+      tolerance: 0.25
+      use_astar: true
+      allow_unknown: false
+
+/g1_nav/controller_server:
+  ros__parameters:
+    use_sim_time: false
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.5
+    progress_checker_plugin: progress_checker
+    goal_checker_plugin: general_goal_checker
+    controller_plugins: [FollowPath]
+    progress_checker:
+      plugin: nav2_controller::SimpleProgressChecker
+      required_movement_radius: 0.15
+      movement_time_allowance: 15.0
+    general_goal_checker:
+      plugin: nav2_controller::SimpleGoalChecker
+      # Reach the requested XY without a separate final-heading recovery spin.
+      # RPP still rotates toward the path before it starts forward motion.
+      xy_goal_tolerance: 0.40
+      yaw_goal_tolerance: 6.283
+      stateful: true
+    FollowPath:
+      plugin: nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
+      desired_linear_vel: 0.20
+      lookahead_dist: 0.40
+      min_lookahead_dist: 0.30
+      max_lookahead_dist: 0.60
+      lookahead_time: 1.5
+      use_velocity_scaled_lookahead_dist: true
+      transform_tolerance: 0.5
+      use_rotate_to_heading: true
+      rotate_to_heading_angular_vel: 0.20
+      rotate_to_heading_min_angle: 0.35
+      # RPP limits each turn command around the measured odometry twist. With
+      # 10 Hz pose-derived odometry and 0.20 here, a stationary robot receives
+      # only 0.02 rad/s and never gets through the G1 gait deadband. Let RPP
+      # request the full 0.20 rad/s in one cycle; the host safety gateway still
+      # caps |wz| at 0.20 and applies its independent 0.20 rad/s^2 slew limit.
+      max_angular_accel: 2.0
+      use_regulated_linear_velocity_scaling: true
+      regulated_linear_scaling_min_radius: 0.90
+      regulated_linear_scaling_min_speed: 0.10
+      use_cost_regulated_linear_velocity_scaling: false
+      use_approach_linear_velocity_scaling: true
+      min_approach_linear_velocity: 0.05
+      max_allowed_time_to_collision: 1.0
+
+/g1_nav/local_costmap/local_costmap:
+  ros__parameters:
+    use_sim_time: false
+    update_frequency: 5.0
+    publish_frequency: 5.0
+    global_frame: map
+    robot_base_frame: g1_nav_base
+    transform_tolerance: 0.5
+    rolling_window: true
+    width: 5
+    height: 5
+    resolution: 0.05
+    robot_radius: 0.35
+    # Build the rolling local costmap from the live, motion-corrected Livox
+    # scan. Inflation then provides obstacle-distance costs to the controller.
+    plugins: [obstacle_layer, inflation_layer]
+    obstacle_layer:
+      plugin: nav2_costmap_2d::ObstacleLayer
+      enabled: true
+      observation_sources: lidar
+      lidar:
+        topic: /g1_nav/lidar_costmap
+        data_type: PointCloud2
+        marking: true
+        clearing: true
+        obstacle_max_range: 2.0
+        raytrace_max_range: 2.5
+        min_obstacle_height: 0.15
+        max_obstacle_height: 1.80
+    inflation_layer:
+      plugin: nav2_costmap_2d::InflationLayer
+      cost_scaling_factor: 4.0
+      inflation_radius: 0.55
+    always_send_full_costmap: false
+
+/g1_nav/global_costmap/global_costmap:
+  ros__parameters:
+    use_sim_time: false
+    update_frequency: 1.0
+    publish_frequency: 1.0
+    global_frame: map
+    robot_base_frame: g1_nav_base
+    robot_radius: 0.35
+    resolution: 0.05
+    track_unknown_space: true
+    plugins: [static_layer, inflation_layer]
+    static_layer:
+      plugin: nav2_costmap_2d::StaticLayer
+      map_subscribe_transient_local: true
+    inflation_layer:
+      plugin: nav2_costmap_2d::InflationLayer
+      cost_scaling_factor: 8.0
+      inflation_radius: 0.42
+    always_send_full_costmap: true
+
+/g1_nav/recoveries_server:
+  ros__parameters:
+    use_sim_time: false
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    # Motion recoveries stay unavailable during supervised G1 bring-up.
+    recovery_plugins: [wait]
+    wait:
+      plugin: nav2_recoveries/Wait
+    global_frame: map
+    robot_base_frame: g1_nav_base
+    transform_timeout: 0.5
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 0.20
+    min_rotational_vel: 0.10
+    rotational_acc_lim: 0.20
+
+/g1_nav/map_server:
+  ros__parameters:
+    use_sim_time: false
+    yaml_filename: /data/maps/teaching_lab_nav/teaching_lab_nav.yaml

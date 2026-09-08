@@ -1,0 +1,60 @@
+# Map localizer parameters — exact values from the currently-deployed
+# run_localizer.sh on the robot. Source of truth: scripts/run_localizer.sh.
+# Keep this file in sync if you change the bash wrapper.
+
+map_localizer:
+  ros__parameters:
+    # Topics
+    scan_topic: /cloud_registered
+    odom_topic: /Odometry
+    map_frame: map
+    odom_frame: world
+
+    # ICP correspondence + acceptance
+    icp_max_dist: 0.5
+    min_fitness: 0.4
+    min_fitness_reloc: 0.4
+    max_rmse: 0.30
+    confidence_th: 0.7
+
+    # Init / recovery gates
+    max_init_dist_from_hint: 0.7
+    max_recovery_drift_from_prior: 0.4
+    relocalize_after_n_losses: 20
+
+    # Per-tick motion gates
+    max_dpose_per_tick: 0.3
+    max_map_drift_rate: 0.15
+    drift_rate_speed_gain: 0.30
+    jump_fitness_margin: 0.08
+
+    # Ceiling filter (100.0 = effectively disabled — scan ceiling kept)
+    max_ceiling_above_floor: 100.0
+
+    # ICP scale cascades
+    use_multi_scale_icp: true
+    multi_scale_voxels: [0.6, 0.4, 0.2]
+    track_multi_scale_voxels: [0.3, 0.15]
+
+    # ICP mode flags
+    use_3d_icp: true
+    use_fpfh_ransac: false
+
+    # Kalman smoothing on output pose
+    use_kalman: true
+    kalman_process_var: 0.001
+    kalman_meas_var: 0.02
+
+    # Local map management
+    dis_updatemap: 3.5
+    local_map_radius: 10.0
+
+    # Loop rate
+    loc_period: 0.4
+
+    # Freeze ICP after first successful init → robot pose driven by Fast-LIO
+    # odometry only afterwards. Re-localization is OFF by design.
+    freeze_after_init: true
+
+    # Initial pose hint in map frame: [x, y, z, roll_deg, pitch_deg, yaw_deg]
+    initial_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

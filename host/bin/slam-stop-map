@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+name="$G1_SLAM_CONTAINER"
+deploy_dir="$G1_SLAM_PROJECT_DIR"
+
+if ! sudo docker container inspect "$name" >/dev/null 2>&1; then
+  echo "SLAM container does not exist: $name"
+  exit 0
+fi
+
+mode="$(sudo docker inspect --format '{{index .Config.Cmd 0}}' "$name")"
+if [[ "$mode" != "mapping" ]]; then
+  echo "Refusing map-save stop: container mode is '$mode', not 'mapping'." >&2
+  exit 3
+fi
+
+exec "$deploy_dir/scripts/stop_container.sh"

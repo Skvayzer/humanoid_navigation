@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+# Normal operation is localization against the floor-aligned teaching-lab map.
+# An optional simple .pcd filename may be supplied for another saved map.
+exec "$G1_SLAM_PROJECT_DIR/host/bin/slam-start-localize" "${1:-${G1_SLAM_DEFAULT_MAP:-teaching_lab_aligned.pcd}}"

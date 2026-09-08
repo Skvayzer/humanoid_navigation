@@ -1,0 +1,63 @@
+/**:
+  ros__parameters:
+    # NDT-OMP from slam.zip, tuned conservatively for the indoor teaching lab.
+    registration_method: NDT_OMP
+    score_threshold: 3.0
+    ndt_resolution: 0.5
+    ndt_step_size: 0.1
+    ndt_num_threads: 3
+    ndt_max_iterations: 30
+    transform_epsilon: 0.01
+
+    # Fast-LIO already deskews and transforms this scan into its IMU/body frame.
+    enable_scan_voxel_filter: true
+    voxel_leaf_size: 0.15
+    scan_min_range: 0.5
+    scan_max_range: 40.0
+    scan_period: 0.1
+    cloud_queue_depth: 1
+    min_scan_interval_sec: 0.2
+
+    use_pcd_map: true
+    map_path: /data/maps/teaching_lab_aligned.pcd
+    enable_local_map_crop: false
+
+    # This is the original mapping-start pose transformed by the same rigid
+    # correction baked into teaching_lab_aligned.pcd. /initialpose may replace it.
+    set_initial_pose: true
+    initial_pose_x: 0.0
+    initial_pose_y: 0.0
+    initial_pose_z: 1.278283265
+    initial_pose_qx: -0.999372743
+    initial_pose_qy: -0.000471650
+    initial_pose_qz: -0.032254282
+    initial_pose_qw: 0.014613700
+
+    # Use Fast-LIO's absolute camera_init->body odometry as the between-scan
+    # prediction.  Do not fuse the IMU twice.
+    use_odom: true
+    use_absolute_odom_pose_prediction: true
+    absolute_odom_correction_gain: 0.1
+    absolute_odom_max_time_delta_sec: 0.10
+    use_twist_prediction: false
+    use_imu: false
+    use_imu_preintegration: false
+    use_continuous_time_deskew: false
+
+    reject_above_score_threshold: true
+    predict_pose_from_previous_delta: true
+    enable_reinitialization_request_output: true
+
+    # Preserve Fast-LIO's existing chain: map->world->camera_init->body.
+    global_frame_id: map
+    odom_frame_id: world
+    base_frame_id: body
+    enable_map_odom_tf: true
+    # Foxy implementation otherwise republishes the startup map->world TF
+    # after NDT has updated pcl_pose. Publish pose/TF from each accepted scan.
+    enable_timer_publishing: false
+    pose_publish_frequency: 10.0
+
+    # Publish all 49k map points once using transient-local QoS for Foxglove.
+    viz_downsample: false
+    viz_voxel_leaf_size: 0.10

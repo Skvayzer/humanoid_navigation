@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../scripts/env.sh"
+
+launcher="$G1_SLAM_PROJECT_DIR/visualization/rosbridge/run_rosbridge.sh"
+log="$G1_SLAM_RUNTIME_DIR/logs/rosbridge/bridge.log"
+port=9090
+
+port_is_open() {
+  ss -lnt | awk -v port=":${port}" '$4 ~ (port "$") {found=1} END {exit !found}'
+}
+
+if port_is_open; then
+  echo "Foxglove rosbridge is already listening: ws://<robot-ip>:${port}"
+  exit 0
+fi
+
+if pgrep -f "^/usr/bin/python3 /opt/ros/foxy/bin/ros2 launch rosbridge_server rosbridge_websocket_launch.xml" >/dev/null; then
+  echo "A rosbridge launcher exists but port ${port} is not listening." >&2
+  echo "Check: $log" >&2
+  exit 2
+fi
+
+mkdir -p "$(dirname "$log")"
+cd "$G1_SLAM_PROJECT_DIR"
+nohup "$launcher" >> "$log" 2>&1 </dev/null &
+launcher_pid=$!
+
+for _ in $(seq 1 20); do
+  if port_is_open; then
+    echo "Foxglove rosbridge started (PID $launcher_pid): ws://<robot-ip>:${port}"
+    exit 0
+  fi
+  if ! kill -0 "$launcher_pid" 2>/dev/null; then
+    echo "Foxglove rosbridge exited during startup. Check: $log" >&2
+    exit 3
+  fi
+  sleep 1
+done
+
+echo "Timed out waiting for Foxglove rosbridge on port ${port}. Check: $log" >&2
+exit 4

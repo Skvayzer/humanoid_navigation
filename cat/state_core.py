@@ -6,7 +6,6 @@ calibrated. This is a model comparison, not confirmation of robot embodiment.
 from pathlib import Path
 import xml.etree.ElementTree as ET
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 from perception_core import rotation_matrix
 
@@ -129,7 +128,10 @@ class Kinematics:
                 axis = np.fromstring(a.get('axis', '0 0 1'), sep=' ')
                 axis /= np.linalg.norm(axis)
                 anchor = np.fromstring(a.get('pos', '0 0 0'), sep=' ')
-                r = Rotation.from_rotvec(axis*angles[j.get('name')]).as_matrix()
+                half_angle = .5*angles[j.get('name')]
+                # Use the already-tested quaternion routine on both old Foxy
+                # SciPy and current development environments.
+                r = rotation_matrix(np.r_[axis*np.sin(half_angle), np.cos(half_angle)])
                 motion = np.eye(4)
                 motion[:3, :3], motion[:3, 3] = r, anchor-r@anchor
                 t = t @ motion

@@ -19,4 +19,3 @@
     max_octomap_nodes: 1000000
     snapshot_directory: /data
     snapshot_every: 5
-    arm_token: /run/g1_nav/g1_motion_armed

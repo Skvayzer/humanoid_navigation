@@ -8,10 +8,12 @@ upstream locomotion module is installed in this image.
 
 ## Start on this G1
 
-Keep the robot stationary for SLAM initialization. Leave navigation disarmed;
-do not run `nav-start-safe`, `g1-motion-arm`, or upstream CAT deployment scripts.
-If navigation is already armed/running, use the existing `killnav` yourself
-before this test. The preview is **not** a replacement for an emergency stop.
+Keep the robot stationary for SLAM initialization. CAT perception can run
+alongside either armed or disarmed navigation; starting/stopping CAT does not
+change navigation's arm state. CAT does not feed these obstacles into Nav2 or
+run a walking policy. Existing navigation remains the operator's responsibility;
+the preview is **not** an obstacle-avoidance safety layer or emergency stop.
+Do not run upstream CAT locomotion deployment scripts for this preview.
 
 Use a **separate checkout**, never replace `~/g1_slam_deploy`:
 
@@ -33,11 +35,10 @@ bash cat/scripts/container.sh logs
 If the checkout or SLAM is already present/running, skip clone/start respectively.
 `build.sh` requires sudo Docker access. It does not install anything on the host.
 The image is `g1-cat-perception:preview`, container `g1-cat-perception-preview`.
-It has no restart policy. The launcher rejects an existing motion-arm token
-and mounts the gateway's runtime directory **read-only** to continue checking
-that token. If a token appears, visualization is invalidated/paused; this does
-**not** stop some other controller or disarm it. An absent token also does not
-prove that unrelated software is not controlling the robot.
+It has no restart policy. CAT does not read or modify the motion-arm token and
+does not mount the gateway's runtime directory. The previous disarmed-only
+restriction was removed at the operator's request on 2026-09-10. No change was
+made to the gateway, its watchdog/limits, Nav2, SLAM, or robot locomotion mode.
 
 ```bash
 bash cat/scripts/container.sh status
@@ -68,7 +69,9 @@ Add these layers one at a time:
 
 Expect `state=PREVIEW_OK`, advancing `sequence`, plausible nonzero
 `obstacle_returns` and `occupied_raw`, and reasonable `processing_ms`.
-`policy_ready` and `motion_enabled` are **always false**. PREVIEW_OK means
+`policy_ready` and `motion_enabled` are **always false for CAT**, not assertions
+that the robot or Nav2 is disarmed; `navigation_arm_state=not_monitored` makes
+that distinction explicit. PREVIEW_OK means
 data processing succeeded, not that localization/ground height is correct.
 
 With the robot stationary and disarmed, place/move an inanimate box, then
@@ -153,7 +156,7 @@ Adapter details and intentional limitations:
   gaps hold the last visualization, with **amber ROI**, `HOLDING_STALE` and
   `data_valid=false`; cloud timestamps are NOT refreshed to disguise stale data.
   After 3 seconds since the last accepted input was received, output/history
-  clear. Arm-token appearance clears immediately. Only `PREVIEW_OK` sets
+  clear. Navigation arming does not invalidate CAT output. Only `PREVIEW_OK` sets
   `data_valid=true`; `policy_ready` remains false in all states. No stale held
   visualization should ever be connected as an actionable policy observation.
 - Foxy's Python TF listener uses relative topic names. The CAT node explicitly

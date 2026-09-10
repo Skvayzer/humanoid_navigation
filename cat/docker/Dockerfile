@@ -23,6 +23,8 @@ RUN ln -s libddsc.so /usr/local/lib/libddsc.so.0 && ldconfig
 COPY cat/perception_core.py cat/preview_node.py /opt/cat/
 COPY cat/config /opt/cat/config
 COPY cat/tests /opt/cat/tests
+# Exercise the host launcher with fake Docker during offline validation.
+COPY cat/scripts/container.sh /opt/cat/scripts/container.sh
 COPY cat/upstream /opt/cat/upstream
 COPY --from=builder /build/out/libcat_octomap.so /opt/cat/build/libcat_octomap.so
 COPY --from=builder /build/messages/install /opt/cat/messages

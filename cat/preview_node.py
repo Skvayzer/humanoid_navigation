@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disarmed CAT perception: raw timed LiDAR, existing SLAM poses, no motion."""
+"""Passive CAT perception: raw timed LiDAR, existing SLAM poses, no motion control."""
 import json
 import os
 from pathlib import Path
@@ -43,8 +43,7 @@ class CatPreview(Node):
                     "display_hold_seconds": 3.0, "cell_ttl_seconds": 30.0,
                     "max_octomap_nodes": 1000000,
                     "sensor_origin_body": [-0.011, -0.02329, 0.04412],
-                    "snapshot_directory": "/data", "snapshot_every": 5,
-                    "arm_token": "/run/g1_nav/g1_motion_armed"}
+                    "snapshot_directory": "/data", "snapshot_every": 5}
         for key, value in defaults.items():
             self.declare_parameter(key, value)
         self.cfg = {key: self.get_parameter(key).value for key in defaults}
@@ -129,6 +128,7 @@ class CatPreview(Node):
 
     def report(self, state, **details):
         data = dict(state=state, perception_only=True, motion_enabled=False,
+                    navigation_arm_state="not_monitored",
                     policy_ready=False, data_valid=(state == "PREVIEW_OK"),
                     sequence=self.sequence, input_topic=self.cfg["input_topic"],
                     frame="map", shape=list(SHAPE), resolution=RESOLUTION, **details)
@@ -197,9 +197,6 @@ class CatPreview(Node):
             timing[name] = round((current-mark)*1000, 2)
             mark = current
         try:
-            if Path(self.cfg["arm_token"]).exists():
-                self.invalidate("motion arm token exists; preview paused (does NOT disarm robot)", hard=True)
-                return
             scan = self.select_scan(started)
             stage("select_ms")
             xyz, offsets, info = livox_points(scan.message, self.cfg["max_points"], self.cfg["min_range"])
@@ -245,8 +242,8 @@ class CatPreview(Node):
             stage("prepare_clouds_ms")
             if time.monotonic() - scan.received > self.cfg["max_output_age"]:
                 raise ValueError("processing exceeded maximum output age")
-            if self.scans.snapshot()[1] != self.generation or Path(self.cfg["arm_token"]).exists():
-                self.invalidate("clock reset or arm token changed during processing", hard=True)
+            if self.scans.snapshot()[1] != self.generation:
+                self.invalidate("clock reset during processing", hard=True)
                 return
             self.last_pose = (np.asarray(translation), rotation_matrix(quat))
             self.last_origin = origin.copy()

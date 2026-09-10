@@ -1,5 +1,25 @@
 # Perception-only validation notes
 
+## 2026-09-10 — allow passive CAT alongside armed navigation
+
+Operator explicitly requested keeping navigation armed while running CAT.
+Removed the launcher and both runtime arm-token checks, the token parameter,
+and the navigation-runtime bind mount. CAT neither monitors nor modifies the
+gateway's arm state. Diagnostics now explicitly say
+`navigation_arm_state=not_monitored`; `motion_enabled=false` describes CAT only.
+
+The five node gate tests, launcher test (fake Docker), and ten stream/decoder
+tests passed using the robot's ROS environment in a temporary directory.
+The launcher regression verifies startup with a test arm token present; the
+node regression completes processing/publication without reading or changing
+that token. No live ROS processing or robot-control calls were made by these
+tests. All seven repository verification tests also passed.
+
+Navigation's actual arm token was present when checked. No change was made to
+Nav2, SLAM, the motion gateway, watchdogs, velocity limits or locomotion mode.
+The operator must rebuild and start only CAT to use the updated runtime. This
+does not connect CAT obstacles to Nav2 or activate the CAT locomotion policy.
+
 ## 2026-09-08 — occupancy continuity and close-range input
 
 Progress checkpoint: `5ee310e` (intentionally marked WIP; not deployed).

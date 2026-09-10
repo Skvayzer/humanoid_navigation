@@ -18,7 +18,9 @@ case "$action" in
     exec sudo docker run --rm --network none --read-only --cap-drop ALL \
       --security-opt no-new-privileges:true --tmpfs /tmp:rw,nosuid,nodev,size=128m \
       "$image" validate ;;
-  start)
+  start|start-research)
+    mode=preview
+    [[ "$action" != start-research ]] || mode=research
     if sudo docker inspect "$name" >/dev/null 2>&1; then
       check_owner
       echo "CAT container exists. Use this script's status/logs or stop before recreating." >&2
@@ -35,7 +37,7 @@ case "$action" in
       --mount "type=bind,src=$project_dir/cat/config,dst=/opt/cat/config,readonly=true" \
       --mount "type=bind,src=$project_dir/config/cyclonedds.xml,dst=/opt/cat/cyclonedds.xml,readonly=true" \
       -e CYCLONEDDS_URI=/opt/cat/cyclonedds.xml \
-      -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" "$image" preview ;;
+      -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" "$image" "$mode" ;;
   stop)
     check_owner
     mkdir -p "$runtime_dir"
@@ -50,5 +52,5 @@ case "$action" in
     check_owner
     sudo docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}' "$name" ;;
   logs) check_owner; exec sudo docker logs --tail 30 "$name" ;;
-  *) echo "Usage: $0 {build|validate|start|status|logs|stop}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {build|validate|start|start-research|status|logs|stop}" >&2; exit 2 ;;
 esac

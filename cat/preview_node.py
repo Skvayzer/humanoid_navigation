@@ -142,6 +142,7 @@ class CatPreview(Node):
         self.last_status = state
 
     def invalidate(self, reason, hard=False):
+        self.on_invalid(reason)
         # A short TF/input gap does not erase observations or pretend to be fresh.
         # Existing cloud timestamps remain unchanged; amber ROI labels a held view.
         age = (time.monotonic() - self.last_good_received
@@ -253,6 +254,7 @@ class CatPreview(Node):
             self.last_good_received = scan.received
             self.last_stamp_ns = scan.start_ns
             self.sequence += 1
+            self.on_sample(grid, processed, origin, scan)
             now_msg = self.get_clock().now().to_msg()
             for name, values in clouds:
                 self.publish_cloud(name, values, now_msg)
@@ -290,6 +292,13 @@ class CatPreview(Node):
                 self.report("PREVIEW_OK", **details)
         except Exception as exc:
             self.invalidate(type(exc).__name__ + ": " + str(exc))
+
+    def on_sample(self, grid, processed, origin, scan):
+        """Optional research extension; the default preview has no policy path."""
+        pass
+
+    def on_invalid(self, reason):
+        pass
 
     def publish_roi(self, origin, stamp, stale=False):
         marker = Marker()

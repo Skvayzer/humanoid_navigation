@@ -19,7 +19,8 @@ class NodeGatesTests(unittest.TestCase):
         node = Obj(cfg={"display_hold_seconds": 3.0}, last_good_received=None,
                    last_pose=None, last_origin=None,
                    tree=Obj(reset=Mock()), report=Mock(), publish_roi=Mock(),
-                   publish_cloud=Mock(), roi_pub=Obj(publish=Mock()))
+                   publish_cloud=Mock(), roi_pub=Obj(publish=Mock()),
+                   on_sample=Mock(), on_invalid=Mock())
         from builtin_interfaces.msg import Time
         node.get_clock = lambda: Obj(now=lambda: Obj(to_msg=lambda: Time(sec=100)))
         node.invalidate = lambda reason, hard=False: CatPreview.invalidate(node, reason, hard)

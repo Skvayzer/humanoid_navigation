@@ -6,7 +6,7 @@ source /opt/cat/messages/setup.bash
 set -u
 case "${1:-validate}" in
   validate)
-    python3 -c 'import preview_node; print("ROS imports OK; node NOT started")'
+    python3 -c 'import preview_node, research_node; print("ROS imports OK; nodes NOT started")'
     # The launcher runs validate with --network none. Exercise actual Foxy
     # subscription resolution too; imports/mocked lookups cannot catch it.
     export CAT_RUN_ROS_GRAPH_TESTS=1 ROS_DOMAIN_ID=101
@@ -15,5 +15,8 @@ case "${1:-validate}" in
   preview)
     exec python3 /opt/cat/preview_node.py --ros-args --params-file /opt/cat/config/preview.yaml
     ;;
-  *) echo 'Only validate or preview is supported. No motion mode exists.' >&2; exit 2 ;;
+  research)
+    exec python3 /opt/cat/research_node.py --ros-args --params-file /opt/cat/config/preview.yaml
+    ;;
+  *) echo 'Only validate, preview or research is supported. No motion mode exists.' >&2; exit 2 ;;
 esac

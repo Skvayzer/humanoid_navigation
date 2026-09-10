@@ -18,3 +18,9 @@ jobs:
       - run: bash cat/scripts/build.sh
       - name: Offline native tests and ROS import (no robot network)
         run: bash cat/scripts/container.sh validate
+      - name: Pinned checkpoint integrity and offline ONNX smoke (no ROS)
+        run: |
+          python3 -m venv /tmp/cat-checkpoint-check
+          /tmp/cat-checkpoint-check/bin/pip install numpy==1.26.4 onnx==1.17.0 onnxruntime==1.20.1
+          /tmp/cat-checkpoint-check/bin/python cat/checkpoint.py fetch
+          /tmp/cat-checkpoint-check/bin/python cat/checkpoint.py smoke

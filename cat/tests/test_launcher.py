@@ -61,17 +61,19 @@ class LauncherTests(unittest.TestCase):
             env = dict(os.environ, PATH=str(binary)+os.pathsep+os.environ['PATH'],
                        G1_CAT_RUNTIME_DIR=str(root / 'cat_runtime'),
                        G1_NAV_RUNTIME_DIR=str(navigation))
-            result = subprocess.run(['bash', str(script), 'start'], env=env,
-                                    capture_output=True, text=True, timeout=5)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('Starting PERCEPTION ONLY', result.stdout)
-            self.assertIn('--read-only', result.stdout)
-            self.assertIn('--cap-drop\nALL', result.stdout)
-            self.assertIn('--cpus\n2', result.stdout)
-            self.assertIn('--memory\n1536m', result.stdout)
-            self.assertNotIn(str(navigation), result.stdout)
-            self.assertNotIn('/run/g1_nav', result.stdout)
-            self.assertTrue(token.exists())
+            for action, mode in [('start', 'preview'), ('start-research', 'research')]:
+                result = subprocess.run(['bash', str(script), action], env=env,
+                                        capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('Starting PERCEPTION ONLY', result.stdout)
+                self.assertTrue(result.stdout.rstrip().endswith(mode))
+                self.assertIn('--read-only', result.stdout)
+                self.assertIn('--cap-drop\nALL', result.stdout)
+                self.assertIn('--cpus\n2', result.stdout)
+                self.assertIn('--memory\n1536m', result.stdout)
+                self.assertNotIn(str(navigation), result.stdout)
+                self.assertNotIn('/run/g1_nav', result.stdout)
+                self.assertTrue(token.exists())
 
 
 if __name__ == '__main__':

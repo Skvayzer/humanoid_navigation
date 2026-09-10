@@ -1,0 +1,19 @@
+{
+  "name": "CAT Generalist v1 (evaluation candidate, not deployment approved)",
+  "repository": "Axian12138/Click-and-Traverse",
+  "revision": "46ce4b57ba0639168d51741b661ff62f7ce6f045",
+  "files": {
+    "policy.onnx": {
+      "path": "logs_v1/generalist_v1/checkpoints/005033164800/policy.onnx",
+      "sha256": "17372d1d7b1c6759a2eb2eea09b9589f55746def198d744517efd05ac8665f62",
+      "size": 1032695
+    },
+    "config.json": {
+      "path": "logs_v1/generalist_v1/checkpoints/config.json",
+      "sha256": "0e38cac262a3c1c95bacdf859193340056fef53b8d2f8414293789cee5d45d2d",
+      "size": 16710
+    }
+  },
+  "expected": {"num_obs": 162, "num_act": 12, "ctrl_dt": 0.02, "action_scale": 0.5},
+  "deployment_approved": false
+}

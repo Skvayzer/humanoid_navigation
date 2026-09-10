@@ -1,5 +1,9 @@
 # CAT live 3D obstacle preview — NO MOTION
 
+Optional next milestones are now available as `start-research`: potential-field
+visualization, checkpoint verification and read-only G1 joint/IMU geometry.
+See [RESEARCH.md](RESEARCH.md). No live policy inference or motor output is enabled.
+
 Branch: `feature/cat-perception-preview`. This is the **first perception
 milestone**, not a walking-policy deployment. It does not start Nav2, consume
 goals, publish velocity/joint commands, change FSM mode, arm/disarm the existing

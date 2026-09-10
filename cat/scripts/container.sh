@@ -40,7 +40,9 @@ case "$action" in
     check_owner
     mkdir -p "$runtime_dir"
     sudo docker stop --time 1 "$name"
-    sudo docker logs "$name" > "$runtime_dir/last_container.log" 2>&1
+    if ! sudo docker logs "$name" > "$runtime_dir/last_container.log" 2>&1; then
+      echo "Warning: could not save complete CAT logs; partial output is in $runtime_dir/last_container.log. Removing the stopped CAT container." >&2
+    fi
     # Only this label-checked preview container is removed; snapshots are retained.
     sudo docker rm "$name"
     echo "CAT preview removed. Snapshot/log retained in $runtime_dir. SLAM/Nav2 untouched." ;;

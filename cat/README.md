@@ -89,6 +89,7 @@ Do not arm anything based on this preview.
 
 ```text
 existing /livox/lidar CustomMsg (raw points and point timestamps)
+  -> assemble packet data into 100 ms sensor-time windows
   + existing SLAM sensor-time map -> world -> camera_init -> body TF
     -> bounded scan queue; newest scan fully covered by TF
       -> calibrated raw-LiDAR-to-body transform + 10 ms point-time pose bins
@@ -140,9 +141,21 @@ Adapter details and intentional limitations:
   NumPy view of validated Livox CDR1 data, avoiding per-point
   Python ROS-object creation that can starve TF reception on Foxy. The decoder
   is checked against ROS serialization, endian/alignment and truncated data.
-  One bounded processing worker runs independently of the ROS input/TF receive loop (no concurrent
-  overlapping map updates). The 16-scan queue selects the newest complete scan
-  covered by TF, received less than 1.5 seconds ago. There is no latest-pose
+  One bounded processing worker runs independently of the ROS input/TF receive
+  loop (no concurrent overlapping map updates). Both large CustomMsgs and small
+  96-point packets are assembled into 100 ms sensor-time windows. Absolute point
+  timestamps are preserved when offsets are rebased, including unsorted offsets
+  and packets that cross a window boundary. A later packet's start timestamp
+  closes earlier windows; receive-time silence never fabricates a complete scan.
+  Input gaps over 25 ms discard partial windows, and windows need at least 75 ms
+  of point-time coverage. DDS loss can still reduce density; batching does not
+  recreate missing points. Duplicate packets do not refresh input age.
+  History is retained by the oldest constituent packet's monotonic receive time
+  (`max_receive_age`, 1.5 seconds), not a fixed raw-message count. Additional
+  limits of 500,000 buffered points (~10 MB point data plus metadata), 64 completed
+  scans and 2,048 pending pieces bound memory. Budget/clock resets clear both
+  partial and completed history. The newest fresh complete scan covered by TF
+  is selected. There is no latest-pose
   fallback: each 10 ms point-time bin requires its own full map-to-body pose.
   This uses interpolation of SLAM poses, not FAST-LIO's IMU-integrated deskewer;
   it is an approximation that still requires testing under movement.
@@ -225,3 +238,9 @@ SLAM/localization and rosbridge stay running. Inspect `/g1_cat/nearfield_points`
 and compare `nearfield_available`, `nearfield_retained`, `nearfield_in_volume`
 with `/g1_cat/occupancy_raw`; CAT morphology and the unchanged height cutoff
 can still remove points from the final processed obstacle grid.
+
+`input_buffer` diagnostics report received packet count, assembled/queued scans,
+buffered points, discarded partial windows and memory-budget resets.
+`batch_packets` and `batch_duration_ms` identify the actual scan being processed.
+If Docker log capture fails during `stop`, a warning and any partial log are
+saved and the helper still removes only the stopped, label-checked CAT container.

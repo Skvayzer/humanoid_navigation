@@ -110,6 +110,7 @@ class Scan:
     received: float
     start_ns: int
     end_ns: int
+    packet_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -162,23 +163,148 @@ def decode_livox_cdr(data):
 
 
 class ScanBuffer:
-    """Small thread-safe queue; processing picks newest scan fully covered by TF."""
-    def __init__(self, capacity=16):
-        self.queue = deque(maxlen=capacity)
+    """Assemble timestamped Livox packets into bounded, time-retained scans.
+
+    A ROS CustomMsg may contain a whole scan OR a single 96-point packet.
+    Windows close only when a later packet's start passes their end. This
+    watermark also handles unsorted point offsets and overlapping packet spans.
+    Backwards packet stamps reset both partial and completed history atomically.
+    """
+    def __init__(self, history_seconds=1.5, scan_duration_ns=100000000,
+                 max_points=500000, max_scans=64, max_parts=2048,
+                 max_packet_gap_ns=25000000):
+        if (not np.isfinite(history_seconds) or history_seconds <= 0 or
+                not 10000000 <= scan_duration_ns <= 100000000 or
+                min(max_points, max_scans, max_parts, max_packet_gap_ns) < 1):
+            raise ValueError("invalid scan-buffer limits")
+        self.history_seconds, self.duration = history_seconds, scan_duration_ns
+        self.max_points, self.max_scans, self.max_parts = max_points, max_scans, max_parts
+        self.max_packet_gap_ns = max_packet_gap_ns
+        self.queue = deque()
+        self.pending = {}
+        self.anchor = None
+        self.last_start = self.last_end = self.last_received = None
+        self.queued_points = 0
+        self.pending_points = self.pending_parts = 0
+        self.input_packets = self.completed_scans = self.duplicates = 0
+        self.discarded_partial = self.evicted_scans = self.budget_resets = 0
         self.lock = threading.Lock()
         self.generation = 0
 
-    def append(self, scan):
-        with self.lock:
-            if self.queue and scan.start_ns < self.queue[-1].start_ns:
-                self.queue.clear()
-                self.generation += 1
-            if not self.queue or scan.start_ns > self.queue[-1].start_ns:
-                self.queue.append(scan)
+    def _discard_pending(self):
+        self.discarded_partial += len(self.pending)
+        self.pending.clear()
+        self.pending_points = self.pending_parts = 0
+        self.anchor = None
 
-    def snapshot(self):
+    def _reset(self):
+        self.queue.clear()
+        self.queued_points = 0
+        self._discard_pending()
+        self.generation += 1
+
+    def _evict(self, now):
+        while self.queue and (now-self.queue[0].received > self.history_seconds or
+                              len(self.queue) > self.max_scans or
+                              self.queued_points+self.pending_points > self.max_points):
+            self.queued_points -= self.queue.popleft().message.point_num
+            self.evicted_scans += 1
+
+    def append(self, packet, received):
+        if (not np.isfinite(received) or packet.point_num != len(packet.points) or
+                not 0 < packet.point_num <= 100000 or
+                not 0 <= packet.end_ns-packet.start_ns <= 200000000):
+            raise ValueError("invalid assembly packet")
         with self.lock:
+            self.input_packets += 1
+            if self.last_start is not None:
+                if packet.start_ns < self.last_start:
+                    self._reset()
+                    self.last_end = packet.end_ns
+                elif packet.start_ns == self.last_start:
+                    self.duplicates += 1
+                    return  # duplicates must not make old input appear fresh
+                elif (packet.start_ns-self.last_end > self.max_packet_gap_ns or
+                      received-self.last_received > self.history_seconds):
+                    # Do not bridge a receive gap with an incomplete scan.
+                    self._discard_pending()
+            self.last_start = packet.start_ns
+            # A short packet may overlap an earlier bundled scan. Do not lose
+            # knowledge of that scan's later points when checking input gaps.
+            self.last_end = max(packet.end_ns, self.last_end or packet.end_ns)
+            self.last_received = received
+            self._evict(received)
+            if self.anchor is None:
+                self.anchor = packet.start_ns
+
+            for start in sorted(self.pending):
+                if start+self.duration > packet.start_ns:
+                    break
+                parts = self.pending.pop(start)
+                count = sum(len(p[0]) for p in parts)
+                self.pending_points -= count
+                self.pending_parts -= len(parts)
+                oldest_receive = min(p[2] for p in parts)
+                if count > 100000 or received-oldest_receive > self.history_seconds:
+                    self.discarded_partial += 1
+                    continue
+                records = np.concatenate([p[0] for p in parts])
+                offset = 0
+                for values, base_delta, _ in parts:
+                    records['offset_time'][offset:offset+len(values)] = (
+                        values['offset_time'].astype(np.int64)+base_delta)
+                    offset += len(values)
+                low, high = int(records['offset_time'].min()), int(records['offset_time'].max())
+                if high-low < self.duration*0.75:
+                    # A tiny fragment is not a complete scan, even after waiting.
+                    self.discarded_partial += 1
+                    continue
+                records.flags.writeable = False
+                assembled = LivoxPacket(records, count, packet.frame, start, start+high)
+                self.queue.append(Scan(assembled, oldest_receive, start, start+high, len(parts)))
+                self.queued_points += count
+                self.completed_scans += 1
+
+            first = self.anchor + ((packet.start_ns-self.anchor)//self.duration)*self.duration
+            last = self.anchor + ((packet.end_ns-self.anchor)//self.duration)*self.duration
+            if first == last:
+                pieces = [(first, packet.points)]
+            else:
+                # A bundled scan may straddle up to three 100 ms windows.
+                # Work in integer nanoseconds, never epoch-valued float seconds.
+                stamps = packet.start_ns+packet.points['offset_time'].astype(np.int64)
+                buckets = (stamps-self.anchor)//self.duration
+                pieces = [(self.anchor+int(b)*self.duration, packet.points[buckets == b])
+                          for b in np.unique(buckets)]
+            for start, records in pieces:
+                self.pending.setdefault(start, []).append((records, packet.start_ns-start, received))
+                self.pending_points += len(records)
+                self.pending_parts += 1
+            self._evict(received)
+            if self.pending_points > self.max_points or self.pending_parts > self.max_parts:
+                self.budget_resets += 1
+                self._reset()
+                raise ValueError("LiDAR packet assembly memory budget exceeded")
+
+    def snapshot(self, now=None):
+        with self.lock:
+            if now is not None:
+                self._evict(now)
+                if self.pending and now-self.last_received > self.history_seconds:
+                    self._discard_pending()
             return list(self.queue), self.generation
+
+    def stats(self, now):
+        with self.lock:
+            return dict(input_packets=self.input_packets, completed_scans=self.completed_scans,
+                        queued_scans=len(self.queue), pending_windows=len(self.pending),
+                        buffered_points=self.queued_points+self.pending_points,
+                        latest_receive_age_s=(None if self.last_received is None else now-self.last_received),
+                        queued_sensor_span_s=(0.0 if not self.queue else
+                                             (self.queue[-1].end_ns-self.queue[0].start_ns)*1e-9),
+                        duplicate_packets=self.duplicates, discarded_partial_windows=self.discarded_partial,
+                        evicted_scans=self.evicted_scans, budget_resets=self.budget_resets,
+                        generation=self.generation)
 
     @staticmethod
     def select(scans, now, max_age, after_ns, tf_end_ns):

@@ -1,5 +1,41 @@
 # Perception-only validation notes
 
+## 2026-09-10 — packet-size independent scan buffering
+
+The live driver was publishing 96-point CustomMsgs at roughly 1.5–1.7 kHz,
+whereas the previous successful run logged about 20,000 points spanning 100 ms
+per message. The launch file still requested `publish_freq: 10.0`; its batching
+change was not attributed to a confirmed setting change. The CAT adapter's
+16-message history held only milliseconds, so no queued input survived until
+the matching map/body TF arrived 0.2–0.6 seconds later.
+
+The fix is entirely in CAT: 100 ms point-time assembly, time-based history
+retention, bounded point/object storage, conservative oldest-receive freshness,
+and unchanged exact sensor-time TF requirements. No upstream driver, Nav2,
+SLAM, extrinsics, floor, controller, or arming changes. The launcher also now
+continues removal of the stopped CAT container if Docker log capture fails.
+
+All 51 CAT tests passed in the robot's temporary test directory, including
+15 packet-assembly regressions, native occupancy tests, no-motion checks, and
+actual TF reception in isolated ROS domain 101. All seven repository source
+verification tests also passed. These checks did not modify live services.
+
+A 36-second passive run against real LiDAR/TF produced 35 PREVIEW_OK updates,
+all 35 occupied clouds nonempty. Samples contained 5,300–18,558 input points
+across 56–194 received packet pieces and 94–100 ms of sensor time. Processing
+including local ROS serialization took approximately 0.45–0.75 seconds/update;
+output receive ages stayed below 1.37 seconds. The final buffer retained 13
+scans spanning 1.35 seconds, ~194k points, and reported zero budget/clock resets.
+Packet loss/receive gaps still reduce density; the adapter does not fabricate
+missing returns. The ROS receive depth and all freshness limits are unchanged.
+
+The passive probe replaced every CAT visualization publisher with a local
+serialization sink. It sent zero visualization/TF/motion messages, did not
+change running services, and did not use the robot SDK. It ran from a temporary
+host directory alongside the existing processes, not under Docker's CPU quota.
+The running CAT image must still be rebuilt/replaced by the operator's sudo
+session, followed by an end-to-end Foxglove check.
+
 ## 2026-09-10 — allow passive CAT alongside armed navigation
 
 Operator explicitly requested keeping navigation armed while running CAT.

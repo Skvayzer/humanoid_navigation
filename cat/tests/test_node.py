@@ -58,7 +58,8 @@ class NodeGatesTests(unittest.TestCase):
             node.sequence, node.generation = 0, 0
             node.scans = Obj(snapshot=lambda: ([], 0))
             node.select_scan = Mock(return_value=Obj(message=None, received=time.monotonic(),
-                                                     start_ns=1000000000, end_ns=1100000000))
+                                                     start_ns=1000000000, end_ns=1100000000,
+                                                     packet_count=1))
             node.pose_at = Mock(return_value=([0.,0.,0.], [0.,0.,0.,1.]))
             node.tree.nodes = 10
             node.tree.prune, node.tree.insert = Mock(return_value=0), Mock()

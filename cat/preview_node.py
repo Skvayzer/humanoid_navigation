@@ -18,7 +18,7 @@ from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker
 from tf2_ros import Buffer, TransformListener
 
-from perception_core import (OccupancyMap, SHAPE, RESOLUTION, Scan, ScanBuffer,
+from perception_core import (OccupancyMap, SHAPE, RESOLUTION, ScanBuffer,
                              cat_preprocess, centers, deskew_livox, grid_origin,
                              livox_points, rotation_matrix, transform_points, decode_livox_cdr)
 
@@ -58,7 +58,7 @@ class CatPreview(Node):
                            for name in CLOUD_TOPICS}
         self.roi_pub = self.create_publisher(Marker, "/g1_cat/roi", 1)
         self.status_pub = self.create_publisher(String, "/g1_cat/diagnostics", 1)
-        self.scans = ScanBuffer()
+        self.scans = ScanBuffer(history_seconds=self.cfg["max_receive_age"])
         self.last_stamp_ns = -1
         self.generation = 0
         self.last_pose = None
@@ -105,10 +105,10 @@ class CatPreview(Node):
             packet = decode_livox_cdr(message)
             if packet.frame != self.cfg["source_frame"]:
                 raise ValueError("unexpected LiDAR frame")
+            self.scans.append(packet, received)
         except (ValueError, UnicodeError) as exc:
             self.input_error = str(exc)
             return
-        self.scans.append(Scan(packet, received, packet.start_ns, packet.end_ns))
         self.input_error = None
 
     def schedule(self):
@@ -129,6 +129,7 @@ class CatPreview(Node):
     def report(self, state, **details):
         data = dict(state=state, perception_only=True, motion_enabled=False,
                     navigation_arm_state="not_monitored",
+                    input_buffer=self.scans.stats(time.monotonic()),
                     policy_ready=False, data_valid=(state == "PREVIEW_OK"),
                     sequence=self.sequence, input_topic=self.cfg["input_topic"],
                     frame="map", shape=list(SHAPE), resolution=RESOLUTION, **details)
@@ -168,20 +169,22 @@ class CatPreview(Node):
         return [t.x, t.y, t.z], [q.x, q.y, q.z, q.w]
 
     def select_scan(self, now):
-        scans, generation = self.scans.snapshot()
+        scans, generation = self.scans.snapshot(now)
         if generation != self.generation:
-            self.invalidate("sensor timestamp moved backwards", hard=True)
+            self.invalidate("input clock or buffer continuity reset", hard=True)
             self.last_stamp_ns = -1
             self.generation = generation
         if not scans:
-            raise ValueError(self.input_error or "waiting for raw LiDAR")
+            raise ValueError(self.input_error or "waiting for a complete 100 ms LiDAR scan")
         if now - scans[-1].received > self.cfg["max_receive_age"]:
             raise ValueError("no fresh raw LiDAR receive")
         latest_tf = self.tf_buffer.lookup_transform("map", "body", Time())
         selected = ScanBuffer.select(scans, now, self.cfg["max_receive_age"],
                                      self.last_stamp_ns, stamp_ns(latest_tf.header.stamp))
         if selected is None:
-            raise ValueError("waiting for sensor-time TF covering a fresh complete scan")
+            lag = (scans[-1].end_ns-stamp_ns(latest_tf.header.stamp))*1e-9
+            raise ValueError("waiting for sensor-time TF covering a fresh complete scan "
+                             "(latest scan ahead of TF: %.3f s; queued scans: %d)" % (lag, len(scans)))
         # Validate both ends; all subsequent bins are within this exact interval.
         self.pose_at(selected.start_ns)
         self.pose_at(selected.end_ns)
@@ -255,6 +258,8 @@ class CatPreview(Node):
                 self.publish_cloud(name, values, now_msg)
             self.publish_roi(origin, now_msg)
             details = dict(info, origin=origin.tolist(), sensor_origin=sensor.tolist(),
+                           batch_packets=scan.packet_count,
+                           batch_duration_ms=(scan.end_ns-scan.start_ns)*1e-6,
                            obstacle_returns=int((within & ~ground).sum()),
                            ground_returns=int((within & ground).sum()),
                            nearfield_in_volume=int((within & (ranges < 0.5)).sum()),

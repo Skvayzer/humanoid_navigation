@@ -72,17 +72,6 @@ class StreamTests(unittest.TestCase):
         self.assertIsNone(ScanBuffer.select(scans, 3, 1, 0, 500))
         self.assertIsNone(ScanBuffer.select(scans, 1.5, 1, 300, 350))
 
-    def test_queue_is_bounded_duplicate_ignored_clock_reset_explicit(self):
-        buf = ScanBuffer(capacity=2)
-        for i in range(4):
-            buf.append(Scan(None, i, i*100, i*100+50))
-        self.assertEqual(len(buf.snapshot()[0]), 2)
-        buf.append(Scan(None, 4, 300, 350))
-        self.assertEqual(len(buf.snapshot()[0]), 2)
-        buf.append(Scan(None, 5, 0, 50))
-        self.assertEqual(len(buf.snapshot()[0]), 1)
-        self.assertEqual(buf.snapshot()[1], 1)
-
     def test_zero_blind_retains_close_returns_but_rejects_invalid(self):
         msg = packet([(0, 0, 0, 0, 0), (.03, 0, 0, 1, 0), (.2, 0, 0, 2, 0x10),
                       (float('nan'), 0, 0, 3, 0), (.1, 0, 0, 4, 0x30), (1, 0, 0, 5, 0)])

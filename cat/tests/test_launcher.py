@@ -9,6 +9,8 @@ import unittest
 class LauncherTests(unittest.TestCase):
     def test_start_allows_armed_navigation_without_mounting_control_state(self):
         script = Path(__file__).resolve().parents[1] / 'scripts' / 'container.sh'
+        if not script.is_file():
+            self.skipTest('host launcher is tested on the CI host, not inside the runtime image')
         with tempfile.TemporaryDirectory(prefix='cat-launcher-test-') as temporary:
             root = Path(temporary)
             binary = root / 'bin'

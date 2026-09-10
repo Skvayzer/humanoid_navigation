@@ -13,6 +13,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ./scripts/verify_source.sh
+      - name: Host launcher regression (fake Docker, no daemon calls)
+        run: python3 -m unittest discover -s cat/tests -p test_launcher.py -v
       - run: bash cat/scripts/build.sh
       - name: Offline native tests and ROS import (no robot network)
         run: bash cat/scripts/container.sh validate

@@ -1,5 +1,41 @@
 # Perception-only validation notes
 
+## 2026-09-10 — research fields, checkpoint audit, read-only telemetry
+
+Implementation commits: `236c396`, `5fa5758`. ARM64 workflow run
+`34481366762` passed: image build, 75 in-container tests (two host-only launcher
+cases skipped there and passed on the CI host), all seven repository checks,
+and pinned ONNX artifact/config verification plus synthetic inference.
+
+Coverage includes SDF/gradient/guidance parity with pinned CAT reference
+samples, unknown/occupied/out-of-volume goal rejection, unreachable-region
+masking, voxel-center sampling, FK parity with three MuJoCo fixtures, telemetry
+validation/freshness/tick reset, research goal/field invalidation and actual
+LowState reception/publication serialization in isolated ROS domain 101.
+The first CI run exposed old SciPy's missing `Rotation.as_matrix`; FK now uses
+the existing tested quaternion routine and passes on Foxy's stock SciPy.
+
+A five-second live **read-only** probe on this G1 accepted 675 advancing
+LowState samples, ticks 263152..268148, with no telemetry/FK-limit errors.
+Only the three telemetry message definitions were built in
+`/tmp/g1-cat-research.EsaJEt`. The probe had no actuator publisher, did not
+change services/modes/arming, and did not import the robot SDK. This verifies
+wire reception and model-limit consistency, not physical embodiment or
+map-to-pelvis calibration.
+
+An offline copy of the existing CAT snapshot yielded 305,067 observed-free
+cells (8,898 in the displayed height slice); a synthetic goal chosen only in
+the offline test yielded 304,991 reachable cells and 304,960 nonzero vectors.
+No goal was published to any ROS topic. Desktop processing was approximately
+207 ms distance-only / 365 ms with guidance; these are not G1 timings or
+evidence of real-time walking readiness. The snapshot was not committed.
+
+The current G1 CAT image has not been rebuilt/replaced by this work: SSH sudo
+Docker access needs the operator's password. `start-research` and the end-to-end
+Foxglove check are the remaining deployment steps in `RESEARCH.md`. No SLAM,
+Nav2, driver, bridge, gateway, firmware or robot-mode settings were changed.
+Live policy inference and actuation remain unimplemented and disabled.
+
 ## 2026-09-10 — packet-size independent scan buffering
 
 The live driver was publishing 96-point CustomMsgs at roughly 1.5–1.7 kHz,

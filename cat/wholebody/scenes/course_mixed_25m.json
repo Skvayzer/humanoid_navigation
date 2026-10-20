@@ -1,0 +1,467 @@
+{
+ "scene_id": "course-mixed-obstacles-v1",
+ "source": "Click-and-Traverse-Mjlab training bank (runtime frame: start at origin facing +x)",
+ "start": [
+  0.0,
+  0.0,
+  0.0
+ ],
+ "goal": [
+  22.5,
+  0.0,
+  0.75
+ ],
+ "room_dimensions": [
+  25.0,
+  2.0,
+  1.6
+ ],
+ "boxes": [
+  {
+   "name": "wall_south",
+   "category": "wall",
+   "center": [
+    11.0,
+    -1.0,
+    0.8
+   ],
+   "half_size": [
+    12.5,
+    0.06,
+    0.8
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "wall_north",
+   "category": "wall",
+   "center": [
+    11.0,
+    1.0,
+    0.8
+   ],
+   "half_size": [
+    12.5,
+    0.06,
+    0.8
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "wall_west",
+   "category": "wall",
+   "center": [
+    -1.5,
+    0.0,
+    0.8
+   ],
+   "half_size": [
+    0.06,
+    1.0,
+    0.8
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "wall_east",
+   "category": "wall",
+   "center": [
+    23.5,
+    0.0,
+    0.8
+   ],
+   "half_size": [
+    0.06,
+    1.0,
+    0.8
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s1_hurdle_low",
+   "category": "hurdle",
+   "center": [
+    1.5,
+    0.0,
+    0.05
+   ],
+   "half_size": [
+    0.05,
+    1.0,
+    0.05
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s2_hurdle_high",
+   "category": "hurdle",
+   "center": [
+    3.5,
+    0.0,
+    0.1
+   ],
+   "half_size": [
+    0.06,
+    1.0,
+    0.1
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s3_beam_high",
+   "category": "beam",
+   "center": [
+    5.5,
+    0.0,
+    1.38
+   ],
+   "half_size": [
+    0.08,
+    1.0,
+    0.22
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s4_beam_low",
+   "category": "beam",
+   "center": [
+    7.5,
+    0.0,
+    1.31
+   ],
+   "half_size": [
+    0.08,
+    1.0,
+    0.29
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s5_gap44_left",
+   "category": "wall_side",
+   "center": [
+    9.5,
+    -0.61,
+    0.8
+   ],
+   "half_size": [
+    0.04,
+    0.39,
+    0.8
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s5_gap44_right",
+   "category": "wall_side",
+   "center": [
+    9.5,
+    0.61,
+    0.8
+   ],
+   "half_size": [
+    0.04,
+    0.39,
+    0.8
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s6_gap34_left",
+   "category": "wall_side",
+   "center": [
+    11.5,
+    -0.585,
+    0.8
+   ],
+   "half_size": [
+    0.04,
+    0.415,
+    0.8
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s6_gap34_right",
+   "category": "wall_side",
+   "center": [
+    11.5,
+    0.585,
+    0.8
+   ],
+   "half_size": [
+    0.04,
+    0.415,
+    0.8
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s7_double_a",
+   "category": "hurdle",
+   "center": [
+    13.2,
+    0.0,
+    0.04
+   ],
+   "half_size": [
+    0.06,
+    1.0,
+    0.04
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s7_double_b",
+   "category": "hurdle",
+   "center": [
+    13.8,
+    0.0,
+    0.04
+   ],
+   "half_size": [
+    0.06,
+    1.0,
+    0.04
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s8_hurdle_under",
+   "category": "hurdle",
+   "center": [
+    15.5,
+    0.0,
+    0.025
+   ],
+   "half_size": [
+    0.04,
+    1.0,
+    0.025
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s8_beam_over",
+   "category": "beam",
+   "center": [
+    15.5,
+    0.0,
+    1.38
+   ],
+   "half_size": [
+    0.08,
+    1.0,
+    0.22
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s9_gap_hurdle_left",
+   "category": "wall_side",
+   "center": [
+    17.5,
+    -0.61,
+    0.8
+   ],
+   "half_size": [
+    0.04,
+    0.39,
+    0.8
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s9_gap_hurdle_right",
+   "category": "wall_side",
+   "center": [
+    17.5,
+    0.61,
+    0.8
+   ],
+   "half_size": [
+    0.04,
+    0.39,
+    0.8
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s9_gap_hurdle_bar",
+   "category": "hurdle",
+   "center": [
+    17.5,
+    0.0,
+    0.05
+   ],
+   "half_size": [
+    0.04,
+    0.22,
+    0.05
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s10_table_a_top",
+   "category": "table_top",
+   "center": [
+    19.7,
+    -0.62,
+    0.73
+   ],
+   "half_size": [
+    0.4,
+    0.32,
+    0.02
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s10_table_a_leg0",
+   "category": "table_leg",
+   "center": [
+    19.34,
+    -0.9,
+    0.355
+   ],
+   "half_size": [
+    0.025,
+    0.025,
+    0.355
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s10_table_a_leg1",
+   "category": "table_leg",
+   "center": [
+    19.34,
+    -0.34,
+    0.355
+   ],
+   "half_size": [
+    0.025,
+    0.025,
+    0.355
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s10_table_a_leg2",
+   "category": "table_leg",
+   "center": [
+    20.06,
+    -0.9,
+    0.355
+   ],
+   "half_size": [
+    0.025,
+    0.025,
+    0.355
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s10_table_a_leg3",
+   "category": "table_leg",
+   "center": [
+    20.06,
+    -0.34,
+    0.355
+   ],
+   "half_size": [
+    0.025,
+    0.025,
+    0.355
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s10_table_b_top",
+   "category": "table_top",
+   "center": [
+    19.7,
+    0.62,
+    0.73
+   ],
+   "half_size": [
+    0.4,
+    0.32,
+    0.02
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s10_table_b_leg0",
+   "category": "table_leg",
+   "center": [
+    19.34,
+    0.34,
+    0.355
+   ],
+   "half_size": [
+    0.025,
+    0.025,
+    0.355
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s10_table_b_leg1",
+   "category": "table_leg",
+   "center": [
+    19.34,
+    0.9,
+    0.355
+   ],
+   "half_size": [
+    0.025,
+    0.025,
+    0.355
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s10_table_b_leg2",
+   "category": "table_leg",
+   "center": [
+    20.06,
+    0.34,
+    0.355
+   ],
+   "half_size": [
+    0.025,
+    0.025,
+    0.355
+   ],
+   "yaw": 0.0
+  },
+  {
+   "name": "s10_table_b_leg3",
+   "category": "table_leg",
+   "center": [
+    20.06,
+    0.9,
+    0.355
+   ],
+   "half_size": [
+    0.025,
+    0.025,
+    0.355
+   ],
+   "yaw": 0.0
+  }
+ ],
+ "training_field_origin": [
+  -1.58,
+  -1.08,
+  0.02
+ ],
+ "training_field_shape": [
+  630,
+  55,
+  40
+ ],
+ "dx": 0.04
+}

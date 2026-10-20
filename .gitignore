@@ -25,3 +25,6 @@ vendor/unitree_cyclone/*.so*
 *.zip
 core
 core.*
+
+.venv-sim/
+outputs_sim2sim/

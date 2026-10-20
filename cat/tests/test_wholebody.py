@@ -114,6 +114,20 @@ class WholeBodyTest(unittest.TestCase):
         b = np.arctan2(self.data['obs'][k+1][i[1]], self.data['obs'][k+1][i[0]])
         return float(np.mod(b-a, 2*np.pi))
 
+    def test_policy_file_matches_contract_and_fixture(self):
+        import hashlib
+        info = self.contract['policy_onnx']
+        path = Path(__file__).resolve().parents[1]/'wholebody'/info['file']
+        content = path.read_bytes()
+        self.assertEqual((len(content), hashlib.sha256(content).hexdigest()), (info['size'], info['sha256']))
+        try:
+            import onnxruntime
+        except ImportError:
+            self.skipTest('ONNX Runtime not installed (hash checked only)')
+        session = onnxruntime.InferenceSession(str(path), providers=['CPUExecutionProvider'])
+        actions = session.run(None, {'obs': self.data['obs'].astype(np.float32)})[0]
+        self.assertLess(float(np.abs(actions-self.data['action']).max()), 1e-5)
+
     def test_motor_target_rule(self):
         c = self.contract
         previous = c['nominal'].copy()

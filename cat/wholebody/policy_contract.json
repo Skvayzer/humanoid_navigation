@@ -513,5 +513,13 @@
   -9.81
  ],
  "field_convention": "grid points at origin + i*dx; trilinear with x-fast corners and z-fast weights (training quirk); guidance/boundary are unit vectors, sdf in metres",
- "source": "Click-and-Traverse-Mjlab cat_mjlab/task.py (step, _fields, _elbow_fields, _observe, reset), task_math.py"
+ "source": "Click-and-Traverse-Mjlab cat_mjlab/task.py (step, _fields, _elbow_fields, _observe, reset), task_math.py",
+ "policy_onnx": {
+  "file": "policy.onnx",
+  "sha256": "4e99a323d20884e598c8bfbbb96f39611098b1966bfe556e9d8ac1512942186e",
+  "size": 1174358,
+  "inputs": "obs float32 [B, 226]",
+  "outputs": "action = tanh(mean) float32 [B, 29], mean float32 [B, 29]",
+  "exported_from": "outputs/saved_checkpoints/generalist_finetune_v1_u596.pt (Click-and-Traverse-Mjlab scripts/export_deploy_bundle.py)"
+ }
 }

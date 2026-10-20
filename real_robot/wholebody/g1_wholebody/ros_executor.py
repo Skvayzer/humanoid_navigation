@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""ROS 2 (Foxy) node around runner.Executor: the CAT whole-body policy on the G1.
+
+  python3 -m g1_wholebody.ros_executor --scene sidegap_corridor_048 --anchor-at-robot --geofence X0 X1 Y0 Y1 [--active]
+
+Inputs   /lowstate (unitree_hg/LowState, raw CDR), /g1_slam/odometry (camera_init -> body) + TF map -> camera_init,
+         /g1_wb/operator (std_msgs/String: shadow | stand | balance | go | stop | damp | reset | idle)
+Outputs  /lowcmd (unitree_hg/LowCmd) ONLY in STAND_UP/STAND/POLICY/DAMP and only with --active;
+         /g1_wb/status (JSON), /g1_wb/virtual_scene, /g1_wb/sdf_slice, /g1_wb/pelvis, /g1_wb/goal for Foxglove
+Without --active the node can never publish /lowcmd (the publisher is not even created).
+"""
+import argparse
+import json
+import signal
+import threading
+import time
+from pathlib import Path
+
+import numpy as np
+
+from wholebody_core import WHOLEBODY, load_contract, quat_matrix
+from . import runner as rn
+from .fields import FieldPlanner, FieldWorker, VirtualScene, GOAL_Z
+from .frames import PelvisChain, heading, matrix_quat, transform
+from .kinematics import FastKinematics
+from .lowlevel import decode_lowstate, NUM_MOTORS
+
+POLICIES = {'u596': WHOLEBODY, 'robust_delay_v1_u150': WHOLEBODY / 'robust_delay_v1_u150'}
+
+
+def parse(argv=None):
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('--policy', default='robust_delay_v1_u150', help='u596 | robust_delay_v1_u150 | <dir with policy.onnx + policy_contract.json>')
+    p.add_argument('--scene', required=True, help='cat/wholebody/scenes/<name> or a scene JSON file')
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument('--anchor', nargs=3, type=float, metavar=('X', 'Y', 'YAW'), help='scene start pose in the map')
+    g.add_argument('--anchor-at-robot', action='store_true', help='put the scene start at the pelvis pose when the node starts')
+    p.add_argument('--geofence', nargs=4, type=float, metavar=('XMIN', 'XMAX', 'YMIN', 'YMAX'),
+                   help='REAL free floor in the map; POLICY is refused without it')
+    p.add_argument('--geofence-from-scene', type=float, metavar='MARGIN',
+                   help='geofence = scene bounding box + MARGIN (only if that floor is really free)')
+    p.add_argument('--mount', default='robot_xml', choices=('robot_xml', 'unitree_urdf'))
+    p.add_argument('--active', action='store_true', help='allow motor commands (gantry procedure; see README)')
+    p.add_argument('--start', choices=('idle', 'shadow'), default='idle')
+    p.add_argument('--kp-scale', type=float, default=1.0)
+    p.add_argument('--odom-topic', default='/g1_slam/odometry')
+    p.add_argument('--map-frame', default='map'); p.add_argument('--odom-frame', default='camera_init')
+    p.add_argument('--log-dir', default=None)
+    return p.parse_args(argv)
+
+
+def policy_paths(name):
+    d = POLICIES.get(name, Path(name))
+    return d / 'policy.onnx', d / 'policy_contract.json'
+
+
+class Bridge:
+    """rclpy side: latest-message slots filled by callbacks, read by the control thread."""
+
+    def __init__(self, args, contract):
+        import rclpy
+        from rclpy.node import Node
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+        from nav_msgs.msg import Odometry
+        from std_msgs.msg import String
+        from geometry_msgs.msg import PoseStamped
+        from sensor_msgs.msg import PointCloud2
+        from visualization_msgs.msg import MarkerArray
+        from tf2_ros import Buffer, TransformListener
+        from unitree_hg.msg import LowState as LowStateMsg
+        self.rclpy = rclpy
+        self.node = Node('g1_wholebody', namespace='g1_wb',
+                         cli_args=['--ros-args', '-r', 'tf:=/tf', '-r', 'tf_static:=/tf_static'])
+        self.lock = threading.Lock()
+        self.lowstate = None; self.pose = None; self.commands = []
+        self.args = args
+        best = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT)
+        self.node.create_subscription(LowStateMsg, '/lowstate', self._lowstate, best, raw=True)
+        self.node.create_subscription(Odometry, args.odom_topic, self._odom, 10)
+        self.node.create_subscription(String, '/g1_wb/operator', self._operator, 10)
+        self.tf = Buffer(); self.tf_listener = TransformListener(self.tf, self.node)
+        self.lowcmd = None
+        if args.active:
+            from unitree_hg.msg import LowCmd as LowCmdMsg
+            self.LowCmdMsg = LowCmdMsg
+            self.lowcmd = self.node.create_publisher(LowCmdMsg, '/lowcmd', QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE))
+        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                             history=HistoryPolicy.KEEP_LAST)
+        self.status = self.node.create_publisher(String, '/g1_wb/status', 5)
+        self.scene_pub = self.node.create_publisher(MarkerArray, '/g1_wb/virtual_scene', latched)
+        self.slice_pub = self.node.create_publisher(PointCloud2, '/g1_wb/sdf_slice', 1)
+        self.pelvis_pub = self.node.create_publisher(PoseStamped, '/g1_wb/pelvis', 5)
+        self.goal_pub = self.node.create_publisher(PoseStamped, '/g1_wb/goal', 1)
+        self.String, self.PoseStamped, self.PointCloud2 = String, PoseStamped, PointCloud2
+        from rclpy.executors import SingleThreadedExecutor
+        self.executor = SingleThreadedExecutor(); self.executor.add_node(self.node)
+        self.thread = threading.Thread(target=self._spin, daemon=True); self.thread.start()
+
+    def _spin(self):
+        while self.rclpy.ok():
+            self.executor.spin_once(timeout_sec=0.05)
+
+    # ------------------------------------------------------------- callbacks (cheap: store only)
+    def _lowstate(self, raw):
+        with self.lock:
+            self.lowstate = (raw, time.monotonic())
+
+    def _odom(self, msg):
+        try:
+            from rclpy.time import Time
+            tf = self.tf.lookup_transform(self.args.map_frame, self.args.odom_frame, Time())
+        except Exception:
+            return
+        t = tf.transform
+        t_map_odom = transform(quat_matrix([t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z]),
+                               [t.translation.x, t.translation.y, t.translation.z])
+        p, o = msg.pose.pose.position, msg.pose.pose.orientation
+        t_odom_body = transform(quat_matrix([o.w, o.x, o.y, o.z]), [p.x, p.y, p.z])
+        stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
+        age = max(0., min(0.5, self.node.get_clock().now().nanoseconds * 1e-9 - stamp))
+        with self.lock:
+            self.pose = (t_map_odom @ t_odom_body, stamp, time.monotonic(), age)
+
+    def _operator(self, msg):
+        with self.lock:
+            self.commands.append(msg.data.strip().lower())
+
+    def take(self):
+        with self.lock:
+            low, pose, cmds = self.lowstate, self.pose, self.commands
+            self.pose = None; self.commands = []
+        return low, pose, cmds
+
+    # ------------------------------------------------------------- outputs
+    def publish_lowcmd(self, cmd):
+        if self.lowcmd is None:
+            raise RuntimeError('motor output requested without --active')
+        m = self.LowCmdMsg(); m.mode_pr = cmd.mode_pr; m.mode_machine = cmd.mode_machine
+        for i in range(NUM_MOTORS):
+            mc = m.motor_cmd[i]
+            mc.mode = int(cmd.mode[i]); mc.q = float(cmd.q[i]); mc.dq = float(cmd.dq[i]); mc.tau = float(cmd.tau[i])
+            mc.kp = float(cmd.kp[i]); mc.kd = float(cmd.kd[i]); mc.reserve = 0
+        m.crc = int(cmd.crc)
+        self.lowcmd.publish(m)
+
+    def pose_msg(self, frame, xyz, quat_wxyz):
+        m = self.PoseStamped(); m.header.frame_id = frame; m.header.stamp = self.node.get_clock().now().to_msg()
+        m.pose.position.x, m.pose.position.y, m.pose.position.z = map(float, xyz)
+        m.pose.orientation.w, m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z = map(float, quat_wxyz)
+        return m
+
+    def publish_scene(self, scene):
+        from visualization_msgs.msg import Marker, MarkerArray
+        arr = MarkerArray()
+        for k, b in enumerate(scene.boxes):
+            m = Marker(); m.header.frame_id = self.args.map_frame; m.ns = 'virtual_scene'; m.id = k; m.type = Marker.CUBE
+            m.pose.position.x, m.pose.position.y, m.pose.position.z = map(float, b['center'])
+            q = matrix_quat(quat_matrix([np.cos(b['yaw'] / 2), 0, 0, np.sin(b['yaw'] / 2)]))
+            m.pose.orientation.w, m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z = map(float, q)
+            m.scale.x, m.scale.y, m.scale.z = (2 * float(h) for h in b['half_size'])
+            m.color.r, m.color.g, m.color.b, m.color.a = 1.0, 0.45, 0.1, 0.45
+            arr.markers.append(m)
+        self.scene_pub.publish(arr)
+
+    def publish_slice(self, fields):
+        from sensor_msgs.msg import PointField
+        k = int(np.clip(round((GOAL_Z - fields.origin[2]) / fields.dx), 0, fields.sdf.shape[2] - 1))
+        nx, ny = fields.sdf.shape[:2]
+        xs = fields.origin[0] + np.arange(nx) * fields.dx; ys = fields.origin[1] + np.arange(ny) * fields.dx
+        X, Y = np.meshgrid(xs, ys, indexing='ij')
+        pts = np.column_stack([X.ravel(), Y.ravel(), np.full(X.size, fields.origin[2] + k * fields.dx), fields.sdf[:, :, k].ravel()]).astype('<f4')
+        m = self.PointCloud2(); m.header.frame_id = self.args.map_frame; m.header.stamp = self.node.get_clock().now().to_msg()
+        m.height, m.width = 1, len(pts)
+        m.fields = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, n in enumerate(('x', 'y', 'z', 'intensity'))]
+        m.point_step, m.row_step, m.is_dense = 16, 16 * len(pts), True
+        m.data = pts.tobytes()
+        self.slice_pub.publish(m)
+
+
+def main(argv=None):
+    args = parse(argv)
+    onnx_path, contract_path = policy_paths(args.policy)
+    contract = load_contract(contract_path); kin = FastKinematics(contract)
+    import onnxruntime as ort
+    opts = ort.SessionOptions(); opts.intra_op_num_threads = 1; opts.inter_op_num_threads = 1
+    session = ort.InferenceSession(str(onnx_path), opts, providers=['CPUExecutionProvider'])
+    infer = lambda obs: session.run(None, {'obs': obs[None].astype(np.float32)})[0][0]
+
+    import rclpy
+    rclpy.init()
+    bridge = Bridge(args, contract)
+    log = bridge.node.get_logger()
+    log.info('policy %s (%s), scene %s, mount %s, %s' % (args.policy, onnx_path, args.scene, args.mount,
+             'ACTIVE: motor output allowed' if args.active else 'PASSIVE: /lowcmd publisher not created'))
+
+    # ---------------------------------------------------------------- anchor the scene
+    chain = PelvisChain(kin, args.mount)
+    if args.anchor_at_robot:
+        log.info('waiting for LowState + SLAM pose to anchor the scene at the robot ...')
+        while rclpy.ok():
+            low, pose, _ = bridge.take()
+            if low is not None and pose is not None:
+                state = decode_lowstate(low[0])
+                pos, quat, rot = chain.pelvis_pose(pose[0], state.q, state.quat_wxyz)
+                anchor = (float(pos[0]), float(pos[1]), heading(rot)); break
+            time.sleep(0.05)
+    else:
+        anchor = tuple(args.anchor)
+    scene = VirtualScene(args.scene, anchor=anchor)
+    fence = tuple(args.geofence) if args.geofence else None
+    if fence is None and args.geofence_from_scene is not None:
+        xs = [scene.start[0], scene.goal[0]] + [b['center'][0] for b in scene.boxes]
+        ys = [scene.start[1], scene.goal[1]] + [b['center'][1] for b in scene.boxes]
+        m = args.geofence_from_scene; fence = (min(xs) - m, max(xs) + m, min(ys) - m, max(ys) + m)
+    log.info('scene %s anchored at (%.2f, %.2f, %.1f deg); goal (%.2f, %.2f); geofence %s' %
+             (scene.name, anchor[0], anchor[1], np.degrees(anchor[2]), scene.goal[0], scene.goal[1], fence))
+    bridge.publish_scene(scene)
+    worker = FieldWorker(scene)
+    cfg = rn.Config(mount=args.mount, kp_scale=args.kp_scale, geofence=fence, allow_active=args.active)
+    ex = rn.Executor(contract, kin, infer, FieldPlanner(scene), worker, cfg)
+    if args.start == 'shadow':
+        ex.command('shadow')
+
+    log_dir = Path(args.log_dir) if args.log_dir else None
+    records = []; last_save = time.monotonic()
+    stop = threading.Event()
+    signal.signal(signal.SIGINT, lambda *_: stop.set()); signal.signal(signal.SIGTERM, lambda *_: stop.set())
+
+    def save():
+        if log_dir is None or not records:
+            return
+        log_dir.mkdir(parents=True, exist_ok=True)
+        keys = records[0].keys()
+        np.savez_compressed(log_dir / ('wholebody_%d.npz' % int(time.time())), **{k: np.array([r[k] for r in records]) for k in keys})
+        records.clear()
+
+    dt = contract['control_dt']; t0 = time.monotonic(); k = 0; overruns = 0; last_mode = ex.mode
+    try:
+        while not stop.is_set() and rclpy.ok():
+            k += 1; deadline = t0 + k * dt
+            delay = deadline - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            elif delay < -dt:
+                overruns += 1; t0 = time.monotonic(); k = 0          # fell behind: restart the schedule
+            low, pose, cmds = bridge.take()
+            now = time.monotonic()
+            if low is not None:
+                try:
+                    ex.on_lowstate(decode_lowstate(low[0], received=low[1]))
+                except ValueError as exc:
+                    log.error('LowState decode: %s' % exc)
+            if pose is not None:
+                ex.on_slam_pose(pose[0], pose[1], received=pose[2], age_s=pose[3])
+            for c in cmds:
+                ok = ex.command(c); log.info('operator %s -> %s (%s)' % (c, 'ok' if ok else 'refused', ex.reason))
+            cmd = ex.step(now)
+            if cmd is not None:
+                bridge.publish_lowcmd(cmd)
+            if ex.mode != last_mode:
+                (log.error if ex.mode == rn.DAMP else log.info)('%s -> %s: %s' % (last_mode, ex.mode, ex.reason)); last_mode = ex.mode
+            L = ex.last
+            if log_dir is not None and ex.state is not None:
+                records.append(dict(t=now, mode=ex.mode, step_s=L.get('step_s', 0.), latency_s=L.get('latency_s') or 0.,
+                                    q=ex.state.q, dq=ex.state.dq, gyro=ex.state.gyro, quat=ex.state.quat_wxyz,
+                                    action=L.get('action', np.zeros(29)), targets=L.get('targets', np.zeros(29)),
+                                    command=L.get('command', np.zeros(4)), pelvis_xy=L.get('pelvis_xy', np.zeros(2))))
+            if k % 10 == 0:
+                status = dict(mode=ex.mode, reason=ex.reason, step_ms=round(1e3 * L.get('step_s', 0.), 2),
+                              latency_ms=round(1e3 * (L.get('latency_s') or 0.), 1), overruns=overruns,
+                              pelvis_xy=np.round(L.get('pelvis_xy', [np.nan, np.nan]), 3).tolist(),
+                              waypoint=ex.planner.active, reached=ex.planner.reached, hold=ex.planner.hold_xy is not None,
+                              fields_age_s=None if ex.fields_time is None else round(now - ex.fields_time, 1),
+                              field_solve_s=None if worker.last_compute_s is None else round(worker.last_compute_s, 2),
+                              field_error=worker.last_error, active_allowed=args.active)
+                bridge.status.publish(bridge.String(data=json.dumps(status)))
+                if ex.state is not None and ex.pose is not None:
+                    pos, quat, _ = ex._pelvis(ex.state)
+                    bridge.pelvis_pub.publish(bridge.pose_msg(args.map_frame, pos, quat))
+                    g = ex.planner.goal
+                    bridge.goal_pub.publish(bridge.pose_msg(args.map_frame, [g[0], g[1], GOAL_Z], [1, 0, 0, 0]))
+            if k % 50 == 0 and ex.fields is not None:
+                bridge.publish_slice(ex.fields)
+            if now - last_save > 10:
+                save(); last_save = now
+    finally:
+        if args.active and ex.mode in rn.ACTIVE and ex.state is not None:
+            ex.command('damp')                       # never go quiet while the motors hold policy targets
+            for _ in range(25):
+                cmd = ex.step(time.monotonic())
+                if cmd is not None:
+                    bridge.publish_lowcmd(cmd)
+                time.sleep(dt)
+            log.error('shutdown: left the robot in DAMP')
+        save(); worker.close()
+        bridge.node.destroy_node(); rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

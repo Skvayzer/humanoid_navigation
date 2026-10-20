@@ -12,7 +12,11 @@
 
 #define EPSS 1e-6
 #define Minimal_Unbalanced_Tree_Size 10
+// Subtrees of at least this many points are rebuilt in a background thread. In rare cases the result
+// then depends on thread timing; the IKD_SYNC_REBUILD build option rebuilds synchronously instead.
+#ifndef Multi_Thread_Rebuild_Point_Num
 #define Multi_Thread_Rebuild_Point_Num 1500
+#endif
 #define DOWNSAMPLE_SWITCH true
 #define ForceRebuildPercentage 0.2
 #define Q_LEN 1000000
@@ -50,12 +54,12 @@ class KD_TREE
 {
     // using MANUAL_Q_ = MANUAL_Q<typename PointType>;
     // using PointVector = std::vector<PointType>;
-
+    
     // using MANUAL_Q_ = MANUAL_Q<typename PointType>;
 public:
     using PointVector = std::vector<PointType, Eigen::aligned_allocator<PointType>>;
     using Ptr = std::shared_ptr<KD_TREE<PointType>>;
-
+    
     struct KD_TREE_NODE
     {
         PointType point;
@@ -116,14 +120,19 @@ public:
 
         {
             cap = max_capacity;
-            heap = new PointType_CMP[max_capacity];
+            // A kNN query (capacity 2k) uses the inline storage: no heap allocation per query.
+            heap = max_capacity <= INLINE_CAPACITY ? reinterpret_cast<PointType_CMP *>(inline_storage)
+                                                   : new PointType_CMP[max_capacity];
             heap_size = 0;
         }
 
         ~MANUAL_HEAP()
         {
-            delete[] heap;
+            if (heap != reinterpret_cast<PointType_CMP *>(inline_storage))
+                delete[] heap;
         }
+        MANUAL_HEAP(const MANUAL_HEAP &) = delete;
+        MANUAL_HEAP &operator=(const MANUAL_HEAP &) = delete;
         void pop()
         {
             if (heap_size == 0)
@@ -133,15 +142,15 @@ public:
             MoveDown(0);
             return;
         }
-        PointType_CMP top()
+        const PointType_CMP &top() const
         {
             return heap[0];
         }
-        void push(PointType_CMP point)
+        void push(const PointType_CMP &point)
         {
             if (heap_size >= cap)
                 return;
-            heap[heap_size] = point;
+            new (&heap[heap_size]) PointType_CMP(point);  // the slot may be uninitialised inline storage
             FloatUp(heap_size);
             heap_size++;
             return;
@@ -157,6 +166,8 @@ public:
         }
 
     private:
+        static constexpr int INLINE_CAPACITY = 16;
+        alignas(PointType_CMP) unsigned char inline_storage[INLINE_CAPACITY * sizeof(PointType_CMP)];
         PointType_CMP *heap;
         void MoveDown(int heap_index)
         {
@@ -290,7 +301,7 @@ private:
     void Delete_by_point(KD_TREE_NODE **root, PointType point, bool allow_rebuild);
     void Add_by_point(KD_TREE_NODE **root, PointType point, bool allow_rebuild, int father_axis);
     void Add_by_range(KD_TREE_NODE **root, BoxPointType boxpoint, bool allow_rebuild);
-    void Search(KD_TREE_NODE *root, int k_nearest, PointType point, MANUAL_HEAP &q, float max_dist); //priority_queue<PointType_CMP>
+    void Search(KD_TREE_NODE *root, int k_nearest, const PointType &point, MANUAL_HEAP &q, float max_dist); //priority_queue<PointType_CMP>
     void Search_by_range(KD_TREE_NODE *root, BoxPointType boxpoint, PointVector &Storage);
     void Search_by_radius(KD_TREE_NODE *root, PointType point, float radius, PointVector &Storage);
     bool Criterion_Check(KD_TREE_NODE *root);
@@ -299,8 +310,8 @@ private:
     void delete_tree_nodes(KD_TREE_NODE **root);
     void downsample(KD_TREE_NODE **root);
     bool same_point(PointType a, PointType b);
-    float calc_dist(PointType a, PointType b);
-    float calc_box_dist(KD_TREE_NODE *node, PointType point);
+    float calc_dist(const PointType &a, const PointType &b);
+    float calc_box_dist(KD_TREE_NODE *node, const PointType &point);
     static bool point_cmp_x(PointType a, PointType b);
     static bool point_cmp_y(PointType a, PointType b);
     static bool point_cmp_z(PointType a, PointType b);
@@ -325,7 +336,7 @@ public:
     int validnum();
     void root_alpha(float &alpha_bal, float &alpha_del);
     void Build(PointVector point_cloud);
-    void Nearest_Search(PointType point, int k_nearest, PointVector &Nearest_Points, vector<float> &Point_Distance, float max_dist = INFINITY);
+    void Nearest_Search(const PointType &point, int k_nearest, PointVector &Nearest_Points, vector<float> &Point_Distance, float max_dist = INFINITY);
     void Box_Search(const BoxPointType &Box_of_Point, PointVector &Storage);
     void Radius_Search(PointType point, const float radius, PointVector &Storage);
     int Add_Points(PointVector &PointToAdd, bool downsample_on);

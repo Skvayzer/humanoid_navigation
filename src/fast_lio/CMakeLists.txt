@@ -1,133 +1,78 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.10)
 project(fast_lio)
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
- ADD_COMPILE_OPTIONS(-std=c++17)
- ADD_COMPILE_OPTIONS(-std=c++17)
- set(CMAKE_CXX_FLAGS "-std=c++17 -O3")
-
- add_definitions(-DROOT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/\")
-
- set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fexceptions")
- set(CMAKE_CXX_STANDARD 17)
+# C++17: required by rclcpp from Humble on and by PCL >= 1.14; fine on Foxy (gcc 9).
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -pthread -std=c++0x -std=c++14 -fexceptions")
+set(CMAKE_CXX_FLAGS "-O3 -pthread -fexceptions")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-message("Current CPU archtecture: ${CMAKE_SYSTEM_PROCESSOR}")
+# FAST_LIO writes its timing log (runtime_pos_log_enable) to <source>/Log/.
+add_definitions(-DROOT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/\")
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
-  include(ProcessorCount)
-  ProcessorCount(N)
-  message("Processer number:  ${N}")
-
-  if(N GREATER 4)
-    add_definitions(-DMP_EN)
-    add_definitions(-DMP_PROC_NUM=3)
-    message("core for MP: 3")
-  elseif(N GREATER 3)
-    add_definitions(-DMP_EN)
-    add_definitions(-DMP_PROC_NUM=2)
-    message("core for MP: 2")
-  else()
-    add_definitions(-DMP_PROC_NUM=1)
-  endif()
+# OpenMP threads for the per-point nearest-search/residual loop: the num_threads parameter, whose
+# default is set here by core count. (Upstream enabled OpenMP on x86 only, which left ARM computers such
+# as the G1's Jetson single-threaded.)
+include(ProcessorCount)
+ProcessorCount(N)
+if(N GREATER 4)
+  set(MP_PROC_NUM 3)
+elseif(N GREATER 3)
+  set(MP_PROC_NUM 2)
 else()
-  add_definitions(-DMP_PROC_NUM=1)
+  set(MP_PROC_NUM 1)
 endif()
+add_definitions(-DMP_PROC_NUM=${MP_PROC_NUM})
 
 find_package(OpenMP QUIET)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}   ${OpenMP_C_FLAGS}")
+if(OpenMP_CXX_FOUND)
+  add_definitions(-DMP_EN)
+endif()
+message(STATUS "${N} cores: OpenMP ${OpenMP_CXX_FOUND}, ${MP_PROC_NUM} threads by default (num_threads)")
 
-find_package(PythonLibs REQUIRED)
-find_path(MATPLOTLIB_CPP_INCLUDE_DIRS "matplotlibcpp.h")
-
-# ROS dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(rclcpp_components REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
-find_package(visualization_msgs REQUIRED)
-find_package(pcl_ros REQUIRED)
-find_package(pcl_conversions REQUIRED)
-find_package(livox_ros_driver2 QUIET)
-if(livox_ros_driver2_FOUND)
-  add_compile_definitions(USE_LIVOX)
-endif()
-find_package(rosidl_default_generators REQUIRED)
-
-set(dependencies
-  rclcpp
-  rclcpp_components
-  geometry_msgs
-  nav_msgs
-  sensor_msgs
-  std_msgs
-  std_srvs
-  visualization_msgs
-  pcl_ros
-  pcl_conversions
-)
-if(livox_ros_driver2_FOUND)
-  list(APPEND dependencies livox_ros_driver2)
-endif()
-
-# Thirdparty libraries
+find_package(tf2_ros REQUIRED)
+find_package(livox_ros_driver2 REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common io)
+# filters: pcl::VoxelGrid is precompiled in libpcl_filters
+find_package(PCL REQUIRED COMPONENTS common io filters)
 
-message(Eigen: ${EIGEN3_INCLUDE_DIR})
-message(STATUS "PCL: ${PCL_INCLUDE_DIRS}")
-
-set(msg_files
-  "msg/Pose6D.msg"
-)
-
-rosidl_generate_interfaces(${PROJECT_NAME}
-  ${msg_files}
-)
-ament_export_dependencies(rosidl_default_runtime)
-
-add_executable(fastlio_mapping src/laserMapping.cpp include/ikd-Tree/ikd_Tree.cpp src/preprocess.cpp)
+add_executable(fastlio_mapping src/laserMapping.cpp src/preprocess.cpp include/ikd-Tree/ikd_Tree.cpp)
 target_include_directories(fastlio_mapping PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
   ${PCL_INCLUDE_DIRS}
 )
-target_link_libraries(fastlio_mapping ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} Eigen3::Eigen)
-target_include_directories(fastlio_mapping PRIVATE ${PYTHON_INCLUDE_DIRS})
-
-list(APPEND EOL_LIST "foxy" "galactic" "eloquent" "dashing" "crystal")
-
-if($ENV{ROS_DISTRO} IN_LIST EOL_LIST)
-  # Custommsg to support foxy & galactic
-  rosidl_target_interfaces(fastlio_mapping
-    ${PROJECT_NAME} "rosidl_typesupport_cpp")
-else()
-  rosidl_get_typesupport_target(cpp_typesupport_target
-    ${PROJECT_NAME} "rosidl_typesupport_cpp")
-  target_link_libraries(fastlio_mapping ${cpp_typesupport_target})
+# ikd-Tree rebuilds large subtrees in a background thread, which makes the odometry depend on thread
+# timing in rare cases. Regression checks build with -DIKD_SYNC_REBUILD=ON to get deterministic output.
+option(IKD_SYNC_REBUILD "Rebuild ikd-Tree subtrees synchronously (deterministic, for regression checks)" OFF)
+if(IKD_SYNC_REBUILD)
+  target_compile_definitions(fastlio_mapping PRIVATE Multi_Thread_Rebuild_Point_Num=1000000000)
 endif()
+target_link_libraries(fastlio_mapping ${PCL_LIBRARIES} Eigen3::Eigen)
+# Offline replay (--replay) reads zlib-compressed .g1replay datasets.
+find_package(ZLIB)
+if(ZLIB_FOUND)
+  target_compile_definitions(fastlio_mapping PRIVATE FASTLIO_REPLAY)
+  target_link_libraries(fastlio_mapping ZLIB::ZLIB)
+else()
+  message(WARNING "zlib not found: fastlio_mapping is built without --replay")
+endif()
+ament_target_dependencies(fastlio_mapping
+  rclcpp geometry_msgs nav_msgs sensor_msgs std_msgs std_srvs tf2_ros livox_ros_driver2)
 
-ament_target_dependencies(fastlio_mapping ${dependencies})
-
-# ---------------- Install --------------- #
-install(TARGETS fastlio_mapping
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-install(
-  DIRECTORY config launch
-  DESTINATION share/${PROJECT_NAME}
-)
+install(TARGETS fastlio_mapping DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
 ament_package()

@@ -1,0 +1,110 @@
+{
+  "configById": {
+    "3D!cat": {
+      "cameraState": {
+        "distance": 7,
+        "perspective": true,
+        "phi": 50,
+        "thetaOffset": 45,
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fovy": 45,
+        "near": 0.01,
+        "far": 500
+      },
+      "followMode": "follow-pose",
+      "followTf": "map",
+      "scene": {
+        "enableStats": false
+      },
+      "transforms": {},
+      "topics": {
+        "/g1_cat/sdf_slice": {
+          "visible": true,
+          "pointSize": 8,
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "decayTime": 2.5
+        },
+        "/g1_cat/occupancy_cat": {
+          "visible": true,
+          "pointSize": 3,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "rainbow",
+          "decayTime": 2.5
+        },
+        "/g1_cat/occupancy_raw": {
+          "visible": false,
+          "pointSize": 3,
+          "decayTime": 2.5
+        },
+        "/g1_cat/obstacle_points": {
+          "visible": false,
+          "pointSize": 2
+        },
+        "/g1_cat/ground_points": {
+          "visible": false,
+          "pointSize": 2
+        },
+        "/g1_cat/input_cloud": {
+          "visible": false,
+          "pointSize": 2
+        },
+        "/g1_cat/boundary_preview": {
+          "visible": true
+        },
+        "/g1_cat/roi": {
+          "visible": true
+        }
+      },
+      "layers": {
+        "grid": {
+          "layerId": "foxglove.Grid",
+          "visible": true,
+          "frameId": "map",
+          "size": 10,
+          "divisions": 10
+        }
+      }
+    },
+    "RawMessages!fields": {
+      "topicPath": "/g1_cat/field_diagnostics",
+      "diffEnabled": false,
+      "expansion": "all"
+    },
+    "RawMessages!cat": {
+      "topicPath": "/g1_cat/diagnostics",
+      "diffEnabled": false,
+      "expansion": "all"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "layout": {
+    "first": "3D!cat",
+    "second": {
+      "first": "RawMessages!fields",
+      "second": "RawMessages!cat",
+      "direction": "column",
+      "splitPercentage": 50
+    },
+    "direction": "row",
+    "splitPercentage": 70
+  }
+}

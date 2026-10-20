@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>g1_cat_bridge</name>
+  <version>0.1.0</version>
+  <description>Read-only adapters that let the CAT perception preview run on a G1 whose
+    MID360 is published by the vendor main board (/utlidar/*), with the robot standing still.</description>
+  <maintainer email="artem.voronov@mbzuai.ac.ae">Artem Voronov</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>livox_ros_driver2</depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

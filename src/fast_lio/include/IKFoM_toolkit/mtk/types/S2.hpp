@@ -89,38 +89,38 @@
 namespace MTK {
 
 /**
- * Manifold representation of @f$ S^2 @f$.
+ * Manifold representation of @f$ S^2 @f$. 
  * Used for unit vectors on the sphere or directions in 3D.
- *
+ * 
  * @todo add conversions from/to polar angles?
  */
 template<class _scalar = double, int den = 1, int num = 1, int S2_typ = 3>
 struct S2 {
-
+	
 	typedef _scalar scalar;
-	typedef vect<3, scalar> vect_type;
+	typedef vect<3, scalar> vect_type; 
 	typedef SO3<scalar> SO3_type;
-	typedef typename vect_type::base vec3;
+	typedef typename vect_type::base vec3; 
 	scalar length = scalar(den)/scalar(num);
 	enum {DOF=2, TYP = 1, DIM = 3};
-
+	
 //private:
 	/**
 	 * Unit vector on the sphere, or vector pointing in a direction
 	 */
-	vect_type vec;
-
+	vect_type vec; 
+	
 public:
 	S2() {
 		if(S2_typ == 3) vec=length * vec3(0, 0, std::sqrt(1));
 		if(S2_typ == 2) vec=length * vec3(0, std::sqrt(1), 0);
 		if(S2_typ == 1) vec=length * vec3(std::sqrt(1), 0, 0);
-	}
-	S2(const scalar &x, const scalar &y, const scalar &z) : vec(vec3(x, y, z)) {
+	} 
+	S2(const scalar &x, const scalar &y, const scalar &z) : vec(vec3(x, y, z)) { 
 		vec.normalize();
 		vec = vec * length;
 	}
-
+	
 	S2(const vect_type &_vec) : vec(_vec) {
 		vec.normalize();
 		vec = vec * length;
@@ -132,15 +132,15 @@ public:
 		res.w() = MTK::exp<scalar, 3>(res.vec(), delta, scalar(scale/2));
 		vec = res.toRotationMatrix() * vec;
 	}
-
+	
 	void boxplus(MTK::vectview<const scalar, 2> delta, scalar scale=1) {
 		Eigen::Matrix<scalar, 3, 2> Bx;
 		S2_Bx(Bx);
 		vect_type Bu = Bx*delta;SO3_type res;
 		res.w() = MTK::exp<scalar, 3>(res.vec(), Bu, scalar(scale/2));
 		vec = res.toRotationMatrix() * vec;
-	}
-
+	} 
+	
 	void boxminus(MTK::vectview<scalar, 2> res, const S2<scalar, den, num, S2_typ>& other) const {
 		scalar v_sin = (MTK::hat(vec)*other.vec).norm();
 		scalar v_cos = vec.transpose() * other.vec;
@@ -165,7 +165,7 @@ public:
 			res = theta/v_sin * Bx.transpose() * MTK::hat(other.vec)*vec;
 		}
 	}
-
+	
 	void S2_hat(Eigen::Matrix<scalar, 3, 3> &res)
 	{
 		Eigen::Matrix<scalar, 3, 3> skew_vec;
@@ -182,7 +182,7 @@ public:
 		{
 		if(vec[2] + length > tolerance<scalar>())
 		{
-
+			
 			res << length - vec[0]*vec[0]/(length+vec[2]), -vec[0]*vec[1]/(length+vec[2]),
 					 -vec[0]*vec[1]/(length+vec[2]), length-vec[1]*vec[1]/(length+vec[2]),
 					 -vec[0], -vec[1];
@@ -199,7 +199,7 @@ public:
 		{
 		if(vec[1] + length > tolerance<scalar>())
 		{
-
+			
 			res << length - vec[0]*vec[0]/(length+vec[1]), -vec[0]*vec[2]/(length+vec[1]),
 					 -vec[0], -vec[2],
 					 -vec[0]*vec[2]/(length+vec[1]), length-vec[2]*vec[2]/(length+vec[1]);
@@ -216,7 +216,7 @@ public:
 		{
 		if(vec[0] + length > tolerance<scalar>())
 		{
-
+			
 			res << -vec[1], -vec[2],
 					 length - vec[1]*vec[1]/(length+vec[0]), -vec[2]*vec[1]/(length+vec[0]),
 					 -vec[2]*vec[1]/(length+vec[0]), length-vec[2]*vec[2]/(length+vec[0]);
@@ -241,7 +241,7 @@ public:
 			{
 				scalar v_sin = (MTK::hat(vec)*subtrahend.vec).norm();
 				scalar v_cos = vec.transpose() * subtrahend.vec;
-
+				
 				res = Bx.transpose() * (std::atan2(v_sin, v_cos)/v_sin*MTK::hat(vec)+MTK::hat(vec)*subtrahend.vec*((-v_cos/v_sin/v_sin/length/length/length/length+std::atan2(v_sin, v_cos)/v_sin/v_sin/v_sin)*subtrahend.vec.transpose()*MTK::hat(vec)*MTK::hat(vec)-vec.transpose()/length/length/length/length));
 			}
 			else
@@ -282,20 +282,20 @@ public:
 	operator const vect_type&() const{
 		return vec;
 	}
-
+	
 	const vect_type& get_vect() const {
 		return vec;
 	}
-
+	
 	friend S2<scalar, den, num, S2_typ> operator*(const SO3<scalar>& rot, const S2<scalar, den, num, S2_typ>& dir)
 	{
 		S2<scalar, den, num, S2_typ> ret;
 		ret.vec = rot * dir.vec;
 		return ret;
 	}
-
+	
 	scalar operator[](int idx) const {return vec[idx]; }
-
+	
 	friend std::ostream& operator<<(std::ostream &os, const S2<scalar, den, num, S2_typ>& vec){
 		return os << vec.vec.transpose() << " ";
 	}
@@ -305,7 +305,7 @@ public:
 		vec.vec.normalize();
 		vec.vec = vec.vec * vec.length;
 		return is;
-
+	
 	}
 };
 

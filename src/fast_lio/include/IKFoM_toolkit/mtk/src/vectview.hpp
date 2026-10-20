@@ -49,10 +49,10 @@ namespace MTK {
  * Essentially, @c vectview is only a pointer to @c scalar but can be used directly in @c Eigen expressions.
  * The dimension of the vector is given as template parameter and type-checked when used in expressions.
  * Data has to be modifiable.
- *
+ * 
  * @tparam scalar Scalar type of the vector.
  * @tparam dim    Dimension of the vector.
- *
+ * 
  * @todo @c vectview can be replaced by simple inheritance of @c Eigen::Map, as soon as they get const-correct
  */
 namespace internal {
@@ -124,10 +124,10 @@ public:
  * @c const version of @c vectview.
  * Compared to @c Eigen::Map this implementation is const correct, i.e.,
  * data will not be modifiable using this view.
- *
+ * 
  * @tparam scalar Scalar type of the vector.
  * @tparam dim    Dimension of the vector.
- *
+ * 
  * @sa vectview
  */
 template<class scalar, int dim>

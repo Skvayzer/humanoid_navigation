@@ -1,7 +1,7 @@
 #include "ikd_Tree.h"
 
 /*
-Description: ikd-Tree: an incremental k-d tree for robotic applications
+Description: ikd-Tree: an incremental k-d tree for robotic applications 
 Author: Yixi Cai
 email: yixicai@connect.hku.hk
 */
@@ -423,11 +423,10 @@ void KD_TREE<PointType>::Build(PointVector point_cloud)
 }
 
 template <typename PointType>
-void KD_TREE<PointType>::Nearest_Search(PointType point, int k_nearest, PointVector &Nearest_Points, vector<float> &Point_Distance, float max_dist)
+void KD_TREE<PointType>::Nearest_Search(const PointType &point, int k_nearest, PointVector &Nearest_Points, vector<float> &Point_Distance, float max_dist)
 {
     MANUAL_HEAP q(2 * k_nearest);
     q.clear();
-    vector<float>().swap(Point_Distance);
     if (Rebuild_Ptr == nullptr || *Rebuild_Ptr != Root_Node)
     {
         Search(Root_Node, k_nearest, point, q, max_dist);
@@ -448,13 +447,15 @@ void KD_TREE<PointType>::Nearest_Search(PointType point, int k_nearest, PointVec
         search_mutex_counter -= 1;
         pthread_mutex_unlock(&search_flag_mutex);
     }
+    // Nearest first. Filled in place, so the vectors keep their capacity from one query to the next
+    // (no allocation once warm).
     int k_found = min(k_nearest, int(q.size()));
-    PointVector().swap(Nearest_Points);
-    vector<float>().swap(Point_Distance);
-    for (int i = 0; i < k_found; i++)
+    Nearest_Points.resize(k_found);
+    Point_Distance.resize(k_found);
+    for (int i = k_found - 1; i >= 0; i--)
     {
-        Nearest_Points.insert(Nearest_Points.begin(), q.top().point);
-        Point_Distance.insert(Point_Distance.begin(), q.top().dist);
+        Nearest_Points[i] = q.top().point;
+        Point_Distance[i] = q.top().dist;
         q.pop();
     }
     return;
@@ -1059,7 +1060,7 @@ void KD_TREE<PointType>::Add_by_point(KD_TREE_NODE **root, PointType point, bool
 }
 
 template <typename PointType>
-void KD_TREE<PointType>::Search(KD_TREE_NODE *root, int k_nearest, PointType point, MANUAL_HEAP &q, float max_dist)
+void KD_TREE<PointType>::Search(KD_TREE_NODE *root, int k_nearest, const PointType &point, MANUAL_HEAP &q, float max_dist)
 {
     if (root == nullptr || root->tree_deleted)
         return;
@@ -1300,7 +1301,7 @@ void KD_TREE<PointType>::Search_by_radius(KD_TREE_NODE *root, PointType point, f
     range_center.z = (root->node_range_z[0] + root->node_range_z[1]) * 0.5;
     float dist = sqrt(calc_dist(range_center, point));
     if (dist > radius + sqrt(root->radius_sq)) return;
-    if (dist <= radius - sqrt(root->radius_sq))
+    if (dist <= radius - sqrt(root->radius_sq)) 
     {
         flatten(root, Storage, NOT_RECORD);
         return;
@@ -1327,7 +1328,7 @@ void KD_TREE<PointType>::Search_by_radius(KD_TREE_NODE *root, PointType point, f
         pthread_mutex_lock(&search_flag_mutex);
         Search_by_radius(root->right_son_ptr, point, radius, Storage);
         pthread_mutex_unlock(&search_flag_mutex);
-    }
+    }    
     return;
 }
 
@@ -1680,7 +1681,7 @@ bool KD_TREE<PointType>::same_point(PointType a, PointType b)
 }
 
 template <typename PointType>
-float KD_TREE<PointType>::calc_dist(PointType a, PointType b)
+float KD_TREE<PointType>::calc_dist(const PointType &a, const PointType &b)
 {
     float dist = 0.0f;
     dist = (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z);
@@ -1688,7 +1689,7 @@ float KD_TREE<PointType>::calc_dist(PointType a, PointType b)
 }
 
 template <typename PointType>
-float KD_TREE<PointType>::calc_box_dist(KD_TREE_NODE *node, PointType point)
+float KD_TREE<PointType>::calc_box_dist(KD_TREE_NODE *node, const PointType &point)
 {
     if (node == nullptr)
         return INFINITY;
@@ -1725,3 +1726,4 @@ bool KD_TREE<PointType>::point_cmp_z(PointType a, PointType b) { return a.z < b.
 template class KD_TREE<pcl::PointXYZ>;
 template class KD_TREE<pcl::PointXYZI>;
 template class KD_TREE<pcl::PointXYZINormal>;
+

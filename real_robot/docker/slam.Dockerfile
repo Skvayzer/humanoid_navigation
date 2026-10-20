@@ -1,0 +1,47 @@
+# SLAM for the whole-body pipeline: g1_sensor_restamp + FAST_LIO_G1 + NDT localisation (no Nav2, no Open3D).
+# Build context: repository root.  arm64 (robot) uses the repo's Unitree CycloneDDS runtime; amd64 (laptop) the stock one.
+FROM ros:foxy-ros-base-focal AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake libeigen3-dev libpcl-dev zlib1g-dev python3-colcon-common-extensions python3-dev \
+    ros-foxy-diagnostic-msgs ros-foxy-lifecycle-msgs ros-foxy-pcl-conversions ros-foxy-pcl-ros \
+    ros-foxy-rclcpp-components ros-foxy-rclcpp-lifecycle ros-foxy-std-srvs ros-foxy-tf2-eigen \
+    ros-foxy-tf2-geometry-msgs ros-foxy-tf2-ros ros-foxy-tf2-sensor-msgs ros-foxy-visualization-msgs \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/g1_slam_ws
+COPY src/livox_ros_driver2 src/livox_ros_driver2
+COPY src/fast_lio src/fast_lio
+COPY src/g1_sensor_restamp src/g1_sensor_restamp
+COPY src/ndt_omp_ros2 src/ndt_omp_ros2
+COPY src/lidar_localization_ros2 src/lidar_localization_ros2
+RUN . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j4 colcon build --merge-install \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+
+FROM ros:foxy-ros-base-focal AS runtime
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 libpcl-common1.10 libpcl-io1.10 libpcl-kdtree1.10 libpcl-search1.10 libpcl-filters1.10 \
+    libpcl-registration1.10 python3-numpy python3-yaml \
+    ros-foxy-diagnostic-msgs ros-foxy-lifecycle-msgs ros-foxy-pcl-conversions ros-foxy-pcl-ros \
+    ros-foxy-rclcpp-lifecycle ros-foxy-rmw-cyclonedds-cpp ros-foxy-std-srvs ros-foxy-tf2-eigen \
+    ros-foxy-tf2-geometry-msgs ros-foxy-tf2-ros ros-foxy-tf2-sensor-msgs \
+    ros-foxy-ros2bag ros-foxy-rosbag2-storage-default-plugins \
+    && rm -rf /var/lib/apt/lists/*
+COPY vendor/unitree_cyclone /tmp/unitree_cyclone
+COPY vendor/licenses /usr/share/doc/g1-slam-runtime-licenses
+RUN if [ "$(uname -m)" = aarch64 ]; then \
+      test -f /tmp/unitree_cyclone/libddsc.so || { echo "run scripts/fetch_runtime.sh first" >&2; exit 1; }; \
+      cp /tmp/unitree_cyclone/libddsc.so /usr/local/lib/libddsc.so && \
+      cp /tmp/unitree_cyclone/librmw_cyclonedds_cpp.so /opt/ros/foxy/lib/librmw_cyclonedds_cpp.so && \
+      ln -sf libddsc.so /usr/local/lib/libddsc.so.0 && ldconfig; fi; rm -rf /tmp/unitree_cyclone
+COPY --from=builder /opt/g1_slam_ws/install /opt/g1_slam_ws/install
+COPY real_robot/config /opt/real_robot/config
+COPY real_robot/slam /opt/real_robot/slam
+RUN chmod 0555 /opt/real_robot/slam/*.sh /opt/real_robot/slam/*.py && mkdir -p /data/maps /data/logs && chown -R 1000:1000 /data
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=0 HOME=/tmp/g1_slam_home ROS_LOG_DIR=/data/logs/ros \
+    LD_LIBRARY_PATH=/usr/local/lib:/opt/ros/foxy/lib/aarch64-linux-gnu:/opt/ros/foxy/lib \
+    PYTHONPATH=/opt/real_robot/slam OPENBLAS_NUM_THREADS=1 PYTHONUNBUFFERED=1
+USER 1000:1000
+LABEL com.g1-real-robot.role=slam
+ENTRYPOINT ["/opt/real_robot/slam/run_slam.sh"]
+CMD ["odom"]

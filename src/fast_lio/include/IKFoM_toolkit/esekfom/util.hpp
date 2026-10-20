@@ -78,5 +78,5 @@ id(const T &x)
 }
 
 } // namespace esekfom
-
+	
 #endif // __MEKFOM_UTIL_HPP__

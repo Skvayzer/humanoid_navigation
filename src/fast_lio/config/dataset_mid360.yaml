@@ -1,0 +1,60 @@
+# Baseline config for the check datasets (TIERS IndoorOffice1, HR2-KILO long_corridor), replayed in
+# lockstep by robot/tools/replay_lockstep.py. The lidar is converted to the G1 vendor layout, so it
+# goes through the same reader as the robot (lidar_type 2).
+# Algorithm parameters are the upstream mid360.yaml defaults: keep them fixed so that later fixes
+# are compared against the same settings. Changed lines are marked [DS].
+/**:
+    ros__parameters:
+        # max_iteration N allows up to N+1 iterated updates per scan. Map neighbours are searched again
+        # after an update converges (all |dx| < 0.001), or before the last update if none has; the loop
+        # stops after the second converged update.
+        max_iteration: 3
+        # num_threads: 3               # OpenMP threads of the matching loop (default by core count: 3 with > 4 cores)
+        filter_size_surf: 0.5
+        filter_size_map: 0.5
+        map_type: "ikdtree"              # or "hybrid" (trustworthy voxel planes, include/voxel_map.h, ikd-Tree 5-NN elsewhere) or "voxel"
+        voxel_map:
+            size: 0.25                   # voxel edge [m]
+            min_points: 20               # points needed for a trustworthy plane
+            max_thickness: 0.03          # largest std. deviation across the plane [m]
+            planarity: 0.05              # largest smallest/middle eigenvalue ratio (rejects lines)
+            max_points: 30               # the voxel is frozen at this count (0: never)
+        cube_side_length: 1000.0
+        runtime_pos_log_enable: true     # [DS] per-scan timing printout and Log/ files
+        map_file_path: ""                # [DS]
+
+        common:
+            lid_topic:  "/replay/lidar"  # [DS]
+            imu_topic:  "/replay/imu"    # [DS]
+            time_offset_lidar_to_imu: 0.0
+            lidar_reliable: true         # [DS] no scans lost in transport, so runs are repeatable
+
+        preprocess:
+            lidar_type: 2                # [DS] PointCloud2, vendor layout: per-point `time` (float32 ns after the
+                                         # header stamp; default time_field "time", time_absolute false)
+            scan_line: 4
+            blind: 0.5
+            point_keep_ratio: 0.33         # share of the points beyond blind kept (random, no fixed pattern)
+            timestamp_unit: 3            # [DS] ns
+
+        mapping:
+            map_insert_rule: "closest_to_centre"  # or "first_point" (no voxel-grid bias)
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            det_range: 100.0
+            extrinsic_est_en: false      # [DS] both datasets: stock Livox driver, factory calibration
+            extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
+            extrinsic_R: [ 1., 0., 0.,
+                           0., 1., 0.,
+                           0., 0., 1.]
+
+        publish:
+            path_en: true
+            scan_publish_en: true
+            dense_publish_en: false
+            scan_bodyframe_pub_en: false # [DS]
+
+        pcd_save:
+            pcd_save_en: false           # [DS]

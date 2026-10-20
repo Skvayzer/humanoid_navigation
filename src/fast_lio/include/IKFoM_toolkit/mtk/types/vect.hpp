@@ -73,7 +73,7 @@
 /**
  * @file mtk/types/vect.hpp
  * @brief Basic vectors interpreted as manifolds.
- *
+ * 
  * This file also implements a simple wrapper for matrices, for arbitrary scalars
  * and for positive scalars.
  */
@@ -88,12 +88,12 @@
 
 namespace MTK {
 
-static const Eigen::IOFormat IO_no_spaces(Eigen::StreamPrecision, Eigen::DontAlignCols, ",", ",", "", "", "[", "]");
+static const Eigen::IOFormat IO_no_spaces(Eigen::StreamPrecision, Eigen::DontAlignCols, ",", ",", "", "", "[", "]"); 
 
 
 /**
  * A simple vector class.
- * Implementation is basically a wrapper around Eigen::Matrix with manifold
+ * Implementation is basically a wrapper around Eigen::Matrix with manifold 
  * requirements added.
  */
 template<int D = 3, class _scalar = double, int _Options=Eigen::AutoAlign>
@@ -101,16 +101,16 @@ struct vect : public Eigen::Matrix<_scalar, D, 1, _Options> {
 	typedef Eigen::Matrix<_scalar, D, 1, _Options> base;
 	enum {DOF = D, DIM = D, TYP = 0};
 	typedef _scalar scalar;
-
+	
 	//using base::operator=;
-
+	
 	/** Standard constructor. Sets all values to zero. */
 	vect(const base &src = base::Zero()) : base(src) {}
 
 	/** Constructor copying the value of the expression \a other */
 	template<typename OtherDerived>
 	EIGEN_STRONG_INLINE vect(const Eigen::DenseBase<OtherDerived>& other) : base(other) {}
-
+	
 	/** Construct from memory. */
 	vect(const scalar* src, int size = DOF) : base(base::Map(src, size)) { }
 
@@ -133,14 +133,14 @@ struct vect : public Eigen::Matrix<_scalar, D, 1, _Options> {
 	void S2_Nx_yy(Eigen::Matrix<scalar, 2, 3> &res)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 2, 3>::Zero();
 	}
 
 	void S2_Mx(Eigen::Matrix<scalar, 3, 2> &res, MTK::vectview<const scalar, 2> delta)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 3, 2>::Zero();
 	}
 
@@ -159,7 +159,7 @@ struct vect : public Eigen::Matrix<_scalar, D, 1, _Options> {
 		case '{': term='}'; is.ignore(1); break;
 		default: break;
 		}
-		if(D==Eigen::Dynamic) {
+		if(D==Eigen::Dynamic) { 
 			assert(term !=0 && "Dynamic vectors must be embraced");
 			std::vector<scalar> temp;
 			while(is.good() && is.peek() != term) {
@@ -186,7 +186,7 @@ struct vect : public Eigen::Matrix<_scalar, D, 1, _Options> {
 		}
 		return is;
 	}
-
+	
 	template<int dim>
 	vectview<scalar, dim> tail(){
 		BOOST_STATIC_ASSERT(0< dim && dim <= DOF);
@@ -212,29 +212,29 @@ struct vect : public Eigen::Matrix<_scalar, D, 1, _Options> {
 
 /**
  * A simple matrix class.
- * Implementation is basically a wrapper around Eigen::Matrix with manifold
+ * Implementation is basically a wrapper around Eigen::Matrix with manifold 
  * requirements added, i.e., matrix is viewed as a plain vector for that.
  */
 template<int M, int N, class _scalar = double, int _Options = Eigen::Matrix<_scalar, M, N>::Options>
 struct matrix : public Eigen::Matrix<_scalar, M, N, _Options> {
-	typedef Eigen::Matrix<_scalar, M, N, _Options> base;
+	typedef Eigen::Matrix<_scalar, M, N, _Options> base; 
 	enum {DOF = M * N, TYP = 4, DIM=0};
 	typedef _scalar scalar;
-
-	using base::operator=;
-
+	
+	using base::operator=; 
+	
 	/** Standard constructor. Sets all values to zero. */
 	matrix() {
 		base::setZero();
 	}
-
+	
 	/** Constructor copying the value of the expression \a other */
 	template<typename OtherDerived>
 	EIGEN_STRONG_INLINE matrix(const Eigen::MatrixBase<OtherDerived>& other) : base(other) {}
-
+	
 	/** Construct from memory. */
-	matrix(const scalar* src) : base(src) { }
-
+	matrix(const scalar* src) : base(src) { } 
+	
 	void boxplus(MTK::vectview<const scalar, DOF> vec, scalar scale = 1) {
 		*this += scale * base::Map(vec.data());
 	}
@@ -254,14 +254,14 @@ struct matrix : public Eigen::Matrix<_scalar, M, N, _Options> {
 	void S2_Nx_yy(Eigen::Matrix<scalar, 2, 3> &res)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 2, 3>::Zero();
 	}
 
 	void S2_Mx(Eigen::Matrix<scalar, 3, 2> &res, MTK::vectview<const scalar, 2> delta)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 3, 2>::Zero();
 	}
 
@@ -288,9 +288,9 @@ template<class _scalar = double>
 struct Scalar {
 	enum {DOF = 1, TYP = 5, DIM=0};
 	typedef _scalar scalar;
-
+	
 	scalar value;
-
+	
 	Scalar(const scalar& value = scalar(0)) : value(value) {}
 	operator const scalar&() const { return value; }
 	operator scalar&() { return value; }
@@ -304,14 +304,14 @@ struct Scalar {
 	void S2_Nx_yy(Eigen::Matrix<scalar, 2, 3> &res)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 2, 3>::Zero();
 	}
 
 	void S2_Mx(Eigen::Matrix<scalar, 3, 2> &res, MTK::vectview<const scalar, 2> delta)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 3, 2>::Zero();
 	}
 
@@ -335,9 +335,9 @@ template<class _scalar = double>
 struct PositiveScalar {
 	enum {DOF = 1, TYP = 6, DIM=0};
 	typedef _scalar scalar;
-
+	
 	scalar value;
-
+	
 	PositiveScalar(const scalar& value = scalar(1)) : value(value) {
 		assert(value > scalar(0));
 	}
@@ -363,14 +363,14 @@ struct PositiveScalar {
 	void S2_Nx_yy(Eigen::Matrix<scalar, 2, 3> &res)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 2, 3>::Zero();
 	}
 
 	void S2_Mx(Eigen::Matrix<scalar, 3, 2> &res, MTK::vectview<const scalar, 2> delta)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 3, 2>::Zero();
 	}
 
@@ -386,15 +386,15 @@ template<class _scalar = double>
 struct Complex : public std::complex<_scalar>{
 	enum {DOF = 2, TYP = 7, DIM=0};
 	typedef _scalar scalar;
-
+	
 	typedef std::complex<scalar> Base;
-
+	
 	Complex(const Base& value) : Base(value) {}
 	Complex(const scalar& re = 0.0, const scalar& im = 0.0) : Base(re, im) {}
 	Complex(const MTK::vectview<const scalar, 2> &in) : Base(in[0], in[1]) {}
 	template<class Derived>
 	Complex(const Eigen::DenseBase<Derived> &in) : Base(in[0], in[1]) {}
-
+	
 	void boxplus(MTK::vectview<const scalar, DOF> vec, scalar scale = 1) {
 		Base::real() += scale * vec[0];
 		Base::imag() += scale * vec[1];
@@ -417,21 +417,21 @@ struct Complex : public std::complex<_scalar>{
 	void S2_Nx_yy(Eigen::Matrix<scalar, 2, 3> &res)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 2, 3>::Zero();
 	}
 
 	void S2_Mx(Eigen::Matrix<scalar, 3, 2> &res, MTK::vectview<const scalar, 2> delta)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 3, 2>::Zero();
 	}
-
+	
 	scalar squaredNorm() const {
 		return std::pow(Base::real(),2) + std::pow(Base::imag(),2);
 	}
-
+	
 	const scalar& operator()(int i) const {
 		assert(0<=i && i<2 && "Index out of range");
 		return i==0 ? Base::real() : Base::imag();

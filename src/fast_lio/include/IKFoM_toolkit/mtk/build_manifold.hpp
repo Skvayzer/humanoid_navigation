@@ -36,7 +36,7 @@
  *  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  *  POSSIBILITY OF SUCH DAMAGE.
  */
-
+ 
 /*
  *  Copyright (c) 2008--2011, Universitaet Bremen
  *  All rights reserved.
@@ -73,7 +73,7 @@
 /**
  * @file mtk/build_manifold.hpp
  * @brief Macro to automatically construct compound manifolds.
- *
+ * 
  */
 #ifndef MTK_AUTOCONSTRUCT_HPP_
 #define MTK_AUTOCONSTRUCT_HPP_
@@ -123,18 +123,18 @@ BOOST_PP_FOR_1( \
 		MTK_ENTRIES_TEST, MTK_ENTRIES_NEXT, MTK_ENTRIES_OUTPUT)
 
 #define MTK_PUT_TYPE(type, id, dof, dim, S2state, SO3state) \
-	MTK::SubManifold<type, dof, dim> id;
+	MTK::SubManifold<type, dof, dim> id; 
 #define MTK_PUT_TYPE_AND_ENUM(type, id, dof, dim, S2state, SO3state) \
 	MTK_PUT_TYPE(type, id, dof, dim, S2state, SO3state) \
 	enum {DOF = type::DOF + dof}; \
 	enum {DIM = type::DIM+dim}; \
-	typedef type::scalar scalar;
+	typedef type::scalar scalar; 
 
 #define MTK_ENTRIES_OUTPUT(r, state) MTK_ENTRIES_OUTPUT_I state
 #define MTK_ENTRIES_OUTPUT_I(s, head, seq, dof, dim, S2state, SO3state) \
 	MTK_APPLY_MACRO_ON_TUPLE(~, \
 		BOOST_PP_IF(BOOST_PP_DEC(s), MTK_PUT_TYPE, MTK_PUT_TYPE_AND_ENUM), \
-		( BOOST_PP_TUPLE_REM_2 head, dof, dim, S2state, SO3state))
+		( BOOST_PP_TUPLE_REM_2 head, dof, dim, S2state, SO3state)) 
 
 #define MTK_ENTRIES_TEST(r, state) MTK_TUPLE_ELEM_4_0 state
 
@@ -156,9 +156,9 @@ BOOST_PP_FOR_1( \
 
 /**
  * Construct a manifold.
- * @param name is the class-name of the manifold,
- * @param entries is the list of sub manifolds
- *
+ * @param name is the class-name of the manifold, 
+ * @param entries is the list of sub manifolds 
+ * 
  * Entries must be given in a list like this:
  * @code
  * typedef MTK::trafo<MTK::SO3<double> > Pose;
@@ -171,9 +171,9 @@ BOOST_PP_FOR_1( \
  * @endcode
  * Whitespace is optional, but the double parentheses are necessary.
  * Construction is done entirely in preprocessor.
- * After construction @a name is also a manifold. Its members can be
+ * After construction @a name is also a manifold. Its members can be 
  * accessed by names given in @a entries.
- *
+ * 
  * @note Variable types are not allowed to have commas, thus types like
  *       @c vect<double, 3> need to be typedef'ed ahead.
  */

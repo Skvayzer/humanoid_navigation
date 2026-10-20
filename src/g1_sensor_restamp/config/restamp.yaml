@@ -1,0 +1,11 @@
+# g1_sensor_restamp parameters (the values are the defaults). See README.md.
+g1_sensor_restamp:
+  ros__parameters:
+    imu_in: /utlidar/imu_livox_mid360
+    imu_out: /g1/imu
+    reliable_input: true    # the vendor publishes RELIABLE; false to compare loss counts
+    acc_scale: 1.0          # 1.0 keeps the Livox convention (g); 9.80665 gives m/s^2
+    drop_duplicates: true   # ~6.8 % of messages repeat the previous sample
+    period: 0.005           # [s] nominal sample period (measured 5.0001 ms)
+    creep: 1.0e-6           # [s per sample] must exceed how much slower than `period` the sensor runs
+    max_gap: 0.1            # [s] quiet input -> warning; stamp jump -> grid restart

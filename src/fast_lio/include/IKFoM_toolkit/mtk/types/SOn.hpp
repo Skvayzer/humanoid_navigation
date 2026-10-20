@@ -36,7 +36,7 @@
  *  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  *  POSSIBILITY OF SUCH DAMAGE.
  */
-
+ 
 /*
  *  Copyright (c) 2008--2011, Universitaet Bremen
  *  All rights reserved.
@@ -94,24 +94,24 @@ namespace MTK {
 template<class _scalar = double, int Options = Eigen::AutoAlign>
 struct SO2 : public Eigen::Rotation2D<_scalar> {
 	enum {DOF = 1, DIM = 2, TYP = 3};
-
+	
 	typedef _scalar scalar;
 	typedef Eigen::Rotation2D<scalar> base;
 	typedef vect<DIM, scalar, Options> vect_type;
-
+	
 	//! Construct from angle
 	SO2(const scalar& angle = 0) : base(angle) {	}
-
+	
 	//! Construct from Eigen::Rotation2D
 	SO2(const base& src) : base(src) {}
-
+	
 	/**
 	 * Construct from 2D vector.
 	 * Resulting orientation will rotate the first unit vector to point to vec.
 	 */
 	SO2(const vect_type &vec) : base(atan2(vec[1], vec[0])) {};
-
-
+	
+	
 	//! Calculate @c this->inverse() * @c r
 	SO2 operator%(const base &r) const {
 		return base::inverse() * r;
@@ -122,15 +122,15 @@ struct SO2 : public Eigen::Rotation2D<_scalar> {
 	vect_type operator%(const Eigen::MatrixBase<Derived> &vec) const {
 		return base::inverse() * vec;
 	}
-
+	
 	//! Calculate @c *this * @c r.inverse()
 	SO2 operator/(const SO2 &r) const {
 		return *this * r.inverse();
 	}
-
+	
 	//! Gets the angle as scalar.
 	operator scalar() const {
-		return base::angle();
+		return base::angle(); 
 	}
 	void S2_hat(Eigen::Matrix<scalar, 3, 3> &res)
 	{
@@ -140,28 +140,28 @@ struct SO2 : public Eigen::Rotation2D<_scalar> {
 	void S2_Nx_yy(Eigen::Matrix<scalar, 2, 3> &res)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 2, 3>::Zero();
 	}
 
 	void S2_Mx(Eigen::Matrix<scalar, 3, 2> &res, MTK::vectview<const scalar, 2> delta)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 3, 2>::Zero();
 	}
 
 	void oplus(MTK::vectview<const scalar, DOF> vec, scalar scale = 1) {
 		base::angle() += scale * vec[0];
 	}
-
+	
 	void boxplus(MTK::vectview<const scalar, DOF> vec, scalar scale = 1) {
 		base::angle() += scale * vec[0];
 	}
 	void boxminus(MTK::vectview<scalar, DOF> res, const SO2<scalar>& other) const {
 		res[0] = MTK::normalize(base::angle() - other.angle(), scalar(MTK::pi));
 	}
-
+	
 	friend std::istream& operator>>(std::istream &is, SO2<scalar>& ang){
 		return is >> ang.angle();
 	}
@@ -176,30 +176,30 @@ struct SO2 : public Eigen::Rotation2D<_scalar> {
  */
 template<class _scalar = double, int Options = Eigen::AutoAlign>
 struct SO3 : public Eigen::Quaternion<_scalar, Options> {
-	enum {DOF = 3, DIM = 3, TYP = 2};
+	enum {DOF = 3, DIM = 3, TYP = 2}; 
 	typedef _scalar scalar;
 	typedef Eigen::Quaternion<scalar, Options> base;
 	typedef Eigen::Quaternion<scalar> Quaternion;
 	typedef vect<DIM, scalar, Options> vect_type;
-
+	
 	//! Calculate @c this->inverse() * @c r
-	template<class OtherDerived> EIGEN_STRONG_INLINE
+	template<class OtherDerived> EIGEN_STRONG_INLINE 
 	Quaternion operator%(const Eigen::QuaternionBase<OtherDerived> &r) const {
 		return base::conjugate() * r;
 	}
-
+	
 	//! Calculate @c this->inverse() * @c r
 	template<class Derived>
 	vect_type operator%(const Eigen::MatrixBase<Derived> &vec) const {
 		return base::conjugate() * vec;
 	}
-
+	
 	//! Calculate @c this * @c r.conjugate()
-	template<class OtherDerived> EIGEN_STRONG_INLINE
+	template<class OtherDerived> EIGEN_STRONG_INLINE 
 	Quaternion operator/(const Eigen::QuaternionBase<OtherDerived> &r) const {
 		return *this * r.conjugate();
 	}
-
+	
 	/**
 	 * Construct from real part and three imaginary parts.
 	 * Quaternion is normalized after construction.
@@ -207,29 +207,29 @@ struct SO3 : public Eigen::Quaternion<_scalar, Options> {
 	SO3(const scalar& w, const scalar& x, const scalar& y, const scalar& z) : base(w, x, y, z) {
 		base::normalize();
 	}
-
+	
 	/**
 	 * Construct from Eigen::Quaternion.
 	 * @note Non-normalized input may result result in spurious behavior.
 	 */
 	SO3(const base& src = base::Identity()) : base(src) {}
-
+	
 	/**
 	 * Construct from rotation matrix.
 	 * @note Invalid rotation matrices may lead to spurious behavior.
 	 */
 	template<class Derived>
 	SO3(const Eigen::MatrixBase<Derived>& matrix) : base(matrix) {}
-
+	
 	/**
 	 * Construct from arbitrary rotation type.
 	 * @note Invalid rotation matrices may lead to spurious behavior.
 	 */
 	template<class Derived>
 	SO3(const Eigen::RotationBase<Derived, 3>& rotation) : base(rotation.derived()) {}
-
+	
 	//! @name Manifold requirements
-
+	
 	void boxplus(MTK::vectview<const scalar, DOF> vec, scalar scale=1) {
 		SO3 delta = exp(vec, scale);
 		*this = *this * delta;
@@ -251,14 +251,14 @@ struct SO3 : public Eigen::Quaternion<_scalar, Options> {
 	void S2_Nx_yy(Eigen::Matrix<scalar, 2, 3> &res)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 2, 3>::Zero();
 	}
 
 	void S2_Mx(Eigen::Matrix<scalar, 3, 2> &res, MTK::vectview<const scalar, 2> delta)
 	{
 		std::cerr << "wrong idx for S2" << std::endl;
-		std::exit(100);
+		std::exit(100);	
     	res = Eigen::Matrix<scalar, 3, 2>::Zero();
 	}
 
@@ -272,11 +272,11 @@ struct SO3 : public Eigen::Quaternion<_scalar, Options> {
 		q.coeffs() = coeffs.normalized();
 		return is;
 	}
-
+	
 	//! @name Helper functions
 	//{
 	/**
-	 * Calculate the exponential map. In matrix terms this would correspond
+	 * Calculate the exponential map. In matrix terms this would correspond 
 	 * to the Rodrigues formula.
 	 */
 	// FIXME vectview<> can't be constructed from every MatrixBase<>, use const Vector3x& as workaround
@@ -314,3 +314,4 @@ struct UnalignedType<SO3<Scalar, Options > >{
 }  // namespace MTK
 
 #endif /*SON_H_*/
+

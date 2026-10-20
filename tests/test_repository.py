@@ -41,11 +41,26 @@ class RepositoryTests(unittest.TestCase):
             protected = relative.startswith(("src/", "config/", "nav/"))
             if not protected or relative == "nav/g1_nav_planning.launch.py":
                 continue
+            if relative.startswith("src/fast_lio/"):
+                continue  # replaced on feature/g1-real-robot by FAST_LIO_G1, see test_fast_lio_g1_preserved
             path = ROOT / relative
             if path.suffix == ".pcd":  # upstream example data is not published
                 continue
             with self.subTest(path=relative):
                 self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), expected)
+
+    def test_fast_lio_g1_preserved(self):
+        # feature/g1-real-robot vendors FAST_LIO_G1 unchanged (see src/fast_lio/UPSTREAM_REVISION).
+        lines = (ROOT / "manifests/fast_lio_g1.sha256").read_text().splitlines()
+        self.assertGreater(len(lines), 20)
+        listed = set()
+        for line in lines:
+            expected, relative = line.split("  ", 1)
+            listed.add(relative)
+            with self.subTest(path=relative):
+                self.assertEqual(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(), expected)
+        present = {str(p.relative_to(ROOT)) for p in (ROOT / "src/fast_lio").rglob("*") if p.is_file()}
+        self.assertEqual(present - listed, {"src/fast_lio/UPSTREAM_REVISION"})
 
     def test_gateway_limits_and_nonfinite_input(self):
         spec = importlib.util.spec_from_file_location("gateway", ROOT / "host/g1_cmd_vel_bridge.py")

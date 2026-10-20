@@ -36,7 +36,7 @@
  *  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  *  POSSIBILITY OF SUCH DAMAGE.
  */
-
+ 
 /*
  *  Copyright (c) 2008--2011, Universitaet Bremen
  *  All rights reserved.
@@ -71,7 +71,7 @@
  *  POSSIBILITY OF SUCH DAMAGE.
  */
 /**
- * @file mtk/startIdx.hpp
+ * @file mtk/startIdx.hpp 
  * @brief Tools to access sub-elements of compound manifolds.
  */
 #ifndef GET_START_INDEX_H_
@@ -85,7 +85,7 @@
 namespace MTK {
 
 
-/**
+/** 
  * \defgroup SubManifolds Accessing Submanifolds
  * For compound manifolds constructed using MTK_BUILD_MANIFOLD, member pointers
  * can be used to get sub-vectors or matrix-blocks of a corresponding big matrix.
@@ -93,7 +93,7 @@ namespace MTK {
  * @c &pose::orient and @c &pose::trans give all required information and are still
  * valid if the base type gets extended or the actual types of @a orient and @a trans
  * change (e.g. from 2D to 3D).
- *
+ * 
  * @todo Maybe require manifolds to typedef MatrixType and VectorType, etc.
  */
 //@{
@@ -101,13 +101,13 @@ namespace MTK {
 /**
  * Determine the index of a sub-variable within a compound variable.
  */
-template<class Base, class T, int idx, int dim>
+template<class Base, class T, int idx, int dim> 
 int getStartIdx( MTK::SubManifold<T, idx, dim> Base::*)
 {
 	return idx;
 }
 
-template<class Base, class T, int idx, int dim>
+template<class Base, class T, int idx, int dim> 
 int getStartIdx_( MTK::SubManifold<T, idx, dim> Base::*)
 {
 	return dim;
@@ -116,12 +116,12 @@ int getStartIdx_( MTK::SubManifold<T, idx, dim> Base::*)
 /**
  * Determine the degrees of freedom of a sub-variable within a compound variable.
  */
-template<class Base, class T, int idx, int dim>
+template<class Base, class T, int idx, int dim> 
 int getDof( MTK::SubManifold<T, idx, dim> Base::*)
 {
 	return T::DOF;
 }
-template<class Base, class T, int idx, int dim>
+template<class Base, class T, int idx, int dim> 
 int getDim( MTK::SubManifold<T, idx, dim> Base::*)
 {
 	return T::DIM;
@@ -130,15 +130,15 @@ int getDim( MTK::SubManifold<T, idx, dim> Base::*)
 /**
  * set the diagonal elements of a covariance matrix corresponding to a sub-variable
  */
-template<class Base, class T, int idx, int dim>
-void setDiagonal(Eigen::Matrix<typename Base::scalar, Base::DOF, Base::DOF> &cov,
+template<class Base, class T, int idx, int dim> 
+void setDiagonal(Eigen::Matrix<typename Base::scalar, Base::DOF, Base::DOF> &cov, 
 		MTK::SubManifold<T, idx, dim> Base::*, const typename Base::scalar &val)
 {
 	cov.diagonal().template segment<T::DOF>(idx).setConstant(val);
 }
 
-template<class Base, class T, int idx, int dim>
-void setDiagonal_(Eigen::Matrix<typename Base::scalar, Base::DIM, Base::DIM> &cov,
+template<class Base, class T, int idx, int dim> 
+void setDiagonal_(Eigen::Matrix<typename Base::scalar, Base::DIM, Base::DIM> &cov, 
 		MTK::SubManifold<T, idx, dim> Base::*, const typename Base::scalar &val)
 {
 	cov.diagonal().template segment<T::DIM>(dim).setConstant(val);
@@ -155,7 +155,7 @@ void setDiagonal_(Eigen::Matrix<typename Base::scalar, Base::DIM, Base::DIM> &co
  */
 template<class Base, class T1, int idx1, int dim1, class T2, int idx2, int dim2>
 typename MTK::internal::CovBlock<Base, T1, T2>::Type
-subblock(Eigen::Matrix<typename Base::scalar, Base::DOF, Base::DOF> &cov,
+subblock(Eigen::Matrix<typename Base::scalar, Base::DOF, Base::DOF> &cov, 
 		MTK::SubManifold<T1, idx1, dim1> Base::*, MTK::SubManifold<T2, idx2, dim2> Base::*)
 {
 	return cov.template block<T1::DOF, T2::DOF>(idx1, idx2);
@@ -163,7 +163,7 @@ subblock(Eigen::Matrix<typename Base::scalar, Base::DOF, Base::DOF> &cov,
 
 template<class Base, class T1, int idx1,  int dim1, class T2, int idx2, int dim2>
 typename MTK::internal::CovBlock_<Base, T1, T2>::Type
-subblock_(Eigen::Matrix<typename Base::scalar, Base::DIM, Base::DIM> &cov,
+subblock_(Eigen::Matrix<typename Base::scalar, Base::DIM, Base::DIM> &cov, 
 		MTK::SubManifold<T1, idx1, dim1> Base::*, MTK::SubManifold<T2, idx2, dim2> Base::*)
 {
 	return cov.template block<T1::DIM, T2::DIM>(dim1, dim2);
@@ -192,7 +192,7 @@ subblock_(Eigen::Matrix<typename Base1::scalar, Base1::DIM, Base2::DIM> &cov, MT
  */
 template<class Base, class T, int idx, int dim>
 typename MTK::internal::CovBlock_<Base, T, T>::Type
-subblock_(Eigen::Matrix<typename Base::scalar, Base::DIM, Base::DIM> &cov,
+subblock_(Eigen::Matrix<typename Base::scalar, Base::DIM, Base::DIM> &cov, 
 		MTK::SubManifold<T, idx, dim> Base::*)
 {
 	return cov.template block<T::DIM, T::DIM>(dim, dim);
@@ -200,21 +200,21 @@ subblock_(Eigen::Matrix<typename Base::scalar, Base::DIM, Base::DIM> &cov,
 
 template<class Base, class T, int idx, int dim>
 typename MTK::internal::CovBlock<Base, T, T>::Type
-subblock(Eigen::Matrix<typename Base::scalar, Base::DOF, Base::DOF> &cov,
+subblock(Eigen::Matrix<typename Base::scalar, Base::DOF, Base::DOF> &cov, 
 		MTK::SubManifold<T, idx, dim> Base::*)
 {
 	return cov.template block<T::DOF, T::DOF>(idx, idx);
 }
 
 template<typename Base>
-class get_cov {
+class get_cov { 
 public:
     typedef Eigen::Matrix<typename Base::scalar, Base::DOF, Base::DOF> type;
     typedef const Eigen::Matrix<typename Base::scalar, Base::DOF, Base::DOF> const_type;
 };
 
 template<typename Base>
-class get_cov_ {
+class get_cov_ { 
 public:
     typedef Eigen::Matrix<typename Base::scalar, Base::DIM, Base::DIM> type;
     typedef const Eigen::Matrix<typename Base::scalar, Base::DIM, Base::DIM> const_type;
@@ -275,7 +275,7 @@ subvector(Eigen::Matrix<Scalar, BaseDOF, 1>& vec, SubManifold<T, idx, dim> Base:
 {
 	return subvector_impl(vectview<Scalar, BaseDOF>(vec), ptr);
 }
-
+ 
 template<class Scalar, int BaseDIM, class Base, class T, int idx, int dim>
 vectview<Scalar, T::DIM>
 subvector_(Eigen::Matrix<Scalar, BaseDIM, 1>& vec, SubManifold<T, idx, dim> Base::* ptr)

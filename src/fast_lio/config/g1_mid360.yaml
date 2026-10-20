@@ -1,0 +1,54 @@
+# Unitree G1, Mid-360 in the head, read from the vendor's ROS 2 stream.
+# Mapping parameters are the upstream mid360.yaml defaults; changed lines are marked [G1].
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 3
+        max_iteration: 3
+        filter_size_surf: 0.5
+        filter_size_map: 0.5
+        cube_side_length: 1000.0
+        runtime_pos_log_enable: true     # [G1] per-scan timing printout (and Log/ files) for the first runs
+        map_file_path: ""                # [G1]
+
+        common:
+            lid_topic:  "/utlidar/cloud_livox_mid360"   # [G1] vendor stream, Velodyne-style PointCloud2
+            imu_topic:  "/g1/imu"                       # [G1] restamped by g1_sensor_restamp; raw: /utlidar/imu_livox_mid360
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 2                # [G1] PointCloud2 with per-point `time` (float32) and `ring` (uint16)
+            scan_line: 4
+            blind: 0.5
+            timestamp_unit: 3            # [G1] `time` is in ns
+            scan_rate: 10
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree: 360.0
+            det_range: 100.0
+            extrinsic_est_en: false      # [G1] keep the calibration fixed
+            extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
+            # [G1] Verified 2026-10-20 with tools/sensor_check.py on the robot: the vendor cloud and IMU
+            # are both in the sensor's native (upside-down) frame, so the rotation is identity
+            # (floor found 1.22 m below the sensor). Not the friend's diag(1,-1,-1): that was for
+            # a different driver (/livox/lidar), which rolls the cloud but not the IMU.
+            extrinsic_R: [ 1., 0., 0.,
+                           0., 1., 0.,
+                           0., 0., 1.]
+
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: false                # [G1] upstream accumulates /Laser_map forever and republishes it every second
+            scan_publish_en: true
+            dense_publish_en: false
+            scan_bodyframe_pub_en: false # [G1] unused
+
+        pcd_save:
+            pcd_save_en: false           # [G1] upstream's save only works with map_en
+            interval: -1

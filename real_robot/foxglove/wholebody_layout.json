@@ -1,0 +1,25 @@
+{
+  "configById": {
+    "3D!wb": {
+      "cameraState": {"distance": 8, "perspective": true, "phi": 55, "thetaOffset": 30, "targetOffset": [0, 0, 0], "target": [0, 0, 0], "targetOrientation": [0, 0, 0, 1], "fovy": 45, "near": 0.01, "far": 500},
+      "followMode": "follow-pose",
+      "followTf": "map",
+      "scene": {"enableStats": false},
+      "transforms": {},
+      "topics": {
+        "/g1_wb/virtual_scene": {"visible": true},
+        "/g1_wb/sdf_slice": {"visible": true, "pointSize": 5, "colorField": "intensity", "colorMode": "colormap", "colorMap": "turbo", "decayTime": 2.0},
+        "/g1_wb/pelvis": {"visible": true, "type": "arrow"},
+        "/g1_wb/goal": {"visible": true, "type": "arrow"},
+        "/g1_slam/cloud_registered": {"visible": false, "pointSize": 2},
+        "/g1_slam/path": {"visible": true},
+        "/g1_cat/occupancy_cat": {"visible": false, "pointSize": 3}
+      },
+      "layers": {"grid": {"layerId": "foxglove.Grid", "visible": true, "frameId": "map", "size": 12, "divisions": 12}}
+    },
+    "RawMessages!status": {"topicPath": "/g1_wb/status", "diffEnabled": false, "expansion": "all"}
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "layout": {"first": "3D!wb", "second": "RawMessages!status", "direction": "row", "splitPercentage": 72}
+}

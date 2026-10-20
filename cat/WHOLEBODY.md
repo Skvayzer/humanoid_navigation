@@ -4,6 +4,13 @@ Policy `generalist_finetune_v1_u596` (Click-and-Traverse-Mjlab): one network for
 sideways gaps, rooms. **226 observations -> 29 joint actions (whole body)** -- not the released 162 -> 12 legs-only
 model that `checkpoint_manifest.json` pins. Nothing here commands motors.
 
+## Policies
+
+| Folder | Policy | Use |
+|---|---|---|
+| `wholebody/` | `generalist_finetune_v1_u596` | original; no action-latency training |
+| `wholebody/robust_delay_v1_u150/` | `generalist_robust_delay_v1_u150` | **action-delay and perturbation resistant** (0-20 ms delay, pose/mount noise, friction, mass); same contract and runtime -- see its README |
+
 ## Files
 
 | File | What |

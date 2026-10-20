@@ -128,6 +128,26 @@ class WholeBodyTest(unittest.TestCase):
         actions = session.run(None, {'obs': self.data['obs'].astype(np.float32)})[0]
         self.assertLess(float(np.abs(actions-self.data['action']).max()), 1e-5)
 
+    def test_robust_policy_variant(self):
+        """robust_delay_v1_u150: same runtime contract as the main policy, own ONNX hash, reproduces its training actions."""
+        import hashlib, json
+        folder = Path(__file__).resolve().parents[1]/'wholebody'/'robust_delay_v1_u150'
+        variant = json.loads((folder/'policy_contract.json').read_text())
+        main = json.loads((Path(__file__).resolve().parents[1]/'wholebody'/'policy_contract.json').read_text())
+        own = {'name', 'checkpoint_sha256', 'policy_onnx', 'robustness'}
+        self.assertEqual({k: v for k, v in variant.items() if k not in own}, {k: v for k, v in main.items() if k not in own})
+        info = variant['policy_onnx']
+        content = (folder/info['file']).read_bytes()
+        self.assertEqual((len(content), hashlib.sha256(content).hexdigest()), (info['size'], info['sha256']))
+        try:
+            import onnxruntime
+        except ImportError:
+            self.skipTest('ONNX Runtime not installed (hash checked only)')
+        reference = np.load(folder/'reference_actions.npz')
+        session = onnxruntime.InferenceSession(str(folder/info['file']), providers=['CPUExecutionProvider'])
+        actions = session.run(None, {'obs': reference['obs']})[0]
+        self.assertLess(float(np.abs(actions-reference['action']).max()), 1e-5)
+
     def test_motor_target_rule(self):
         c = self.contract
         previous = c['nominal'].copy()

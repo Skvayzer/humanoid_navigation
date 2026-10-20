@@ -115,8 +115,16 @@ def run(args):
     waypoints = scene.waypoints(args.waypoint_spacing); active = 0
     builder = ObservationBuilder(contract, kin, frequency=args.frequency)
 
+    held = {'step': -1, 'noise': (np.zeros(2), 0.)}
     def pose():
         lag = poses[0] if args.pose_latency else (data.qpos[:3].copy(), data.qpos[3:7].copy())
+        if args.pose_noise and args.pose_period > 1:
+            # Localisation updates at a fixed rate: the error of the last update is held in between (SLAM ~10 Hz).
+            if held['step'] < 0 or len(poses) and stepper['n']-held['step'] >= args.pose_period:
+                held['step'] = stepper['n']; held['noise'] = (rng.normal(0, args.pose_noise, 2), rng.normal(0, args.pose_noise))
+            pos, quat = lag[0].copy(), lag[1].copy(); pos[:2] += held['noise'][0]
+            yaw = held['noise'][1]
+            return pos, quat_mul(quat, np.array([math.cos(yaw/2), 0, 0, math.sin(yaw/2)]))
         pos, quat = lag[0].copy(), lag[1].copy()
         if args.pose_noise:
             pos[:2] += rng.normal(0, args.pose_noise, 2)
@@ -124,6 +132,7 @@ def run(args):
             quat = quat_mul(quat, np.array([math.cos(yaw/2), 0, 0, math.sin(yaw/2)]))
         return pos, quat
 
+    stepper = {'n': 0}
     poses = deque(maxlen=max(1, args.pose_latency+1))
     poses.append((data.qpos[:3].copy(), data.qpos[3:7].copy()))
     fields, field_center, field_goal = None, None, None
@@ -185,6 +194,7 @@ def run(args):
         timing['physics'] += time.time()-t
         contact_steps += touching
         poses.append((data.qpos[:3].copy(), data.qpos[3:7].copy()))
+        stepper['n'] += 1
         t = time.time()
         gyro = data.sensordata[gyro_adr:gyro_adr+3].copy()
         obs = builder.observe(data.qpos[7:].copy(), data.qvel[6:].copy(), gyro, *pose(), fields)
@@ -211,7 +221,7 @@ def run(args):
                   fell=bool(fell), final_xy=[round(float(v), 3) for v in data.qpos[:2]], goal_xy=scene.goal.tolist(),
                   progress_m=round(float(data.qpos[0]-scene.start[0]), 3), contact_steps=int(contact_steps),
                   contact_bodies=dict(sorted(contact_parts.items(), key=lambda kv: -kv[1])[:6]),
-                  settings=dict(pose_noise=args.pose_noise, pose_latency=args.pose_latency, action_delay=args.action_delay,
+                  settings=dict(pose_noise=args.pose_noise, pose_period=args.pose_period, pose_latency=args.pose_latency, action_delay=args.action_delay,
                                 action_latency_ms=args.action_latency_ms, kp_scale=kp_scale, robot_perception=args.robot_perception, ghost=args.ghost, frequency=args.frequency),
                   ms_per_step={k: round(1000*v/(step+1), 2) for k, v in timing.items()})
     if args.trace:
@@ -248,6 +258,7 @@ def main():
     p.add_argument('--frequency', type=float, default=1.4, help='gait frequency (training: U(1.3, 1.5) Hz)')
     p.add_argument('--pose-noise', type=float, default=0., help='pelvis xy noise std (m) and yaw noise std (rad)')
     p.add_argument('--pose-latency', type=int, default=0, help='pose latency in control steps (20 ms)')
+    p.add_argument('--pose-period', type=int, default=1, help='pose noise refreshed every N control steps (SLAM rate); 1 = every step')
     p.add_argument('--action-delay', type=int, default=0, help='action latency in control steps (20 ms)')
     p.add_argument('--action-latency-ms', type=float, default=0., help='observation-to-motor latency within a step (2 ms resolution)')
     p.add_argument('--kp-scale', type=float, default=1.)

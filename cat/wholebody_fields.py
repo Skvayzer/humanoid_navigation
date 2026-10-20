@@ -40,7 +40,7 @@ def training_fields(blocked, first_center, dx, goal):
     if not (seed & ~blocked).any():
         raise ValueError("goal seed has no free cell (goal occupied, unknown or outside the volume)")
     phi = np.ma.MaskedArray(np.where(seed, -1., 1.), mask=blocked)
-    T_ma = skfmm.distance(phi, dx=dx)
+    T_ma = np.ma.asarray(skfmm.distance(phi, dx=dx))     # skfmm returns a plain array when nothing is masked
     free = ~np.ma.getmaskarray(T_ma)
     T = T_ma.filled(float(np.max(T_ma[free])) if free.any() else 0.).astype(np.float32)
     g = -np.stack(np.gradient(T, dx, dx, dx, edge_order=2), axis=-1).astype(np.float32)

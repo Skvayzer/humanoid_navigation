@@ -79,7 +79,8 @@ def build_model(bundle, scene, physical=True):
     for k, b in enumerate(scene.boxes):
         size = ' '.join('%.5f' % v for v in b['half_size']); pos = ' '.join('%.5f' % v for v in b['center'])
         geoms.append('<geom name="obstacle_%d" type="box" pos="%s" size="%s" euler="0 0 %.6f" contype="0" conaffinity="%d" '
-                     'rgba="0.62 0.66 0.70 1"/>' % (k, pos, size, float(b.get('yaw', 0.)), 2 if physical else 0))
+                     'rgba="0.62 0.66 0.70 %s"/>' % (k, pos, size, float(b.get('yaw', 0.)), 2 if physical else 0,
+                                                       '0.18' if 'wall' in b.get('category', '') else '1'))
     xml = re.sub(r'(<worldbody>)', r'\1'+''.join(geoms), xml, count=1)
     model = mujoco.MjModel.from_xml_string(xml)
     model.opt.timestep = .002
@@ -148,9 +149,10 @@ def run(args):
     if args.video:
         renderer = mujoco.Renderer(model, 480, 640); frames = []
         camera = mujoco.MjvCamera(); camera.type = mujoco.mjtCamera.mjCAMERA_TRACKING; camera.trackbodyid = 1
-        camera.distance, camera.elevation, camera.azimuth = 3.2, -22, 135
+        camera.distance, camera.elevation, camera.azimuth = 3.0, -35, 150
     actions = deque([np.zeros(29)]*(args.action_delay+1), maxlen=args.action_delay+1)
     contact_steps, contact_parts, fell, reached = 0, {}, False, False
+    trace = {k: [] for k in ('base', 'quat', 'vel', 'command', 'command_delay', 'sdf', 'action', 'active')}
     timing = dict(fields=0., observe=0., policy=0., physics=0.)
     steps = int(args.seconds/contract['control_dt'])
     for step in range(steps):
@@ -161,15 +163,18 @@ def run(args):
         action = session.run(None, {'obs': obs[None].astype(np.float32)})[0][0]
         timing['policy'] += time.time()-t
         actions.append(action)
+        previous_targets = builder.targets.copy()
         targets = builder.act(actions[0])
+        late = int(round(args.action_latency_ms/1000/contract['physics_dt']))
         t = time.time()
         feedforward = np.zeros(29)
         if contract['upper_gravity_compensation']:
             feedforward[12:] = kin.upper_gravity(data.qpos[7:], data.qpos[3:7])
         touching = False
-        for _ in range(contract['substeps']):
+        for substep in range(contract['substeps']):
             q, dq = data.qpos[7:], data.qvel[6:]
-            torque = kp_scale*contract['kp']*(targets-q)-contract['kd']*dq+feedforward
+            applied = previous_targets if substep < late else targets       # sub-step latency to the motors
+            torque = kp_scale*contract['kp']*(applied-q)-contract['kd']*dq+feedforward
             data.ctrl[:] = np.clip(torque, -contract['torque_limit'], contract['torque_limit'])
             mujoco.mj_step(model, data)
             for c in data.contact[:data.ncon]:
@@ -184,6 +189,10 @@ def run(args):
         gyro = data.sensordata[gyro_adr:gyro_adr+3].copy()
         obs = builder.observe(data.qpos[7:].copy(), data.qvel[6:].copy(), gyro, *pose(), fields)
         timing['observe'] += time.time()-t
+        if args.trace:
+            for k, v in (('base', data.qpos[:3]), ('quat', data.qpos[3:7]), ('vel', data.qvel[:6]), ('command', builder.command),
+                         ('command_delay', builder.command_delay), ('sdf', builder.sdf_delay), ('action', action), ('active', [active])):
+                trace[k].append(np.array(v, dtype=float).copy())
         xy = data.qpos[:2]
         if active < len(waypoints)-1 and np.linalg.norm(waypoints[active]-xy) < args.advance_radius:
             active += 1; update_fields(xy.copy())
@@ -203,8 +212,10 @@ def run(args):
                   progress_m=round(float(data.qpos[0]-scene.start[0]), 3), contact_steps=int(contact_steps),
                   contact_bodies=dict(sorted(contact_parts.items(), key=lambda kv: -kv[1])[:6]),
                   settings=dict(pose_noise=args.pose_noise, pose_latency=args.pose_latency, action_delay=args.action_delay,
-                                kp_scale=kp_scale, robot_perception=args.robot_perception, ghost=args.ghost, frequency=args.frequency),
+                                action_latency_ms=args.action_latency_ms, kp_scale=kp_scale, robot_perception=args.robot_perception, ghost=args.ghost, frequency=args.frequency),
                   ms_per_step={k: round(1000*v/(step+1), 2) for k, v in timing.items()})
+    if args.trace:
+        np.savez_compressed(args.trace, **{k: np.asarray(v) for k, v in trace.items()}, waypoints=np.asarray(waypoints))
     if renderer is not None and frames:
         write_video(args.video, frames, fps=25)
         result['video'] = str(args.video)
@@ -238,11 +249,13 @@ def main():
     p.add_argument('--pose-noise', type=float, default=0., help='pelvis xy noise std (m) and yaw noise std (rad)')
     p.add_argument('--pose-latency', type=int, default=0, help='pose latency in control steps (20 ms)')
     p.add_argument('--action-delay', type=int, default=0, help='action latency in control steps (20 ms)')
+    p.add_argument('--action-latency-ms', type=float, default=0., help='observation-to-motor latency within a step (2 ms resolution)')
     p.add_argument('--kp-scale', type=float, default=1.)
     p.add_argument('--robot-perception', action='store_true', help='drop obstacles below 10 cm and above 1.4 m (robot volume)')
     p.add_argument('--ghost', action='store_true', help='non-physical obstacles (as in training); contacts still counted')
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--video')
+    p.add_argument('--trace', help='npz with per-step base pose, velocity, commands, field distances, actions')
     p.add_argument('--out')
     args = p.parse_args()
     result = run(args)

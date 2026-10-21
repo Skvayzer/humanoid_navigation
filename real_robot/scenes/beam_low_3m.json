@@ -1,0 +1,36 @@
+{
+ "scene_id": "beam_low_3m",
+ "source": "real_robot: one overhead beam 1.5 m ahead, low beam, bottom 1.02 m (training s4_beam_low); start at origin facing +x",
+ "start": [
+  0.0,
+  0.0,
+  0.0
+ ],
+ "goal": [
+  3.0,
+  0.0,
+  0.75
+ ],
+ "room_dimensions": [
+  4.0,
+  2.0,
+  1.6
+ ],
+ "boxes": [
+  {
+   "name": "beam",
+   "category": "beam",
+   "center": [
+    1.5,
+    0.0,
+    1.31
+   ],
+   "half_size": [
+    0.08,
+    1.0,
+    0.29
+   ],
+   "yaw": 0.0
+  }
+ ]
+}

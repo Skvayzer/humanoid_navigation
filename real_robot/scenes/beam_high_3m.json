@@ -1,0 +1,36 @@
+{
+ "scene_id": "beam_high_3m",
+ "source": "real_robot: one overhead beam 1.5 m ahead, high beam, bottom 1.16 m (training s3_beam_high); start at origin facing +x",
+ "start": [
+  0.0,
+  0.0,
+  0.0
+ ],
+ "goal": [
+  3.0,
+  0.0,
+  0.75
+ ],
+ "room_dimensions": [
+  4.0,
+  2.0,
+  1.6
+ ],
+ "boxes": [
+  {
+   "name": "beam",
+   "category": "beam",
+   "center": [
+    1.5,
+    0.0,
+    1.38
+   ],
+   "half_size": [
+    0.08,
+    1.0,
+    0.22
+   ],
+   "yaw": 0.0
+  }
+ ]
+}

@@ -461,6 +461,24 @@
    "advancedView": false,
    "value": "{\"data\": \"sidegap_plain_047\"}"
   },
+  "Publish!scene-beam-high-3m": {
+   "topicName": "/g1_wb/scene",
+   "datatype": "std_msgs/String",
+   "buttonText": "beam_high_3m",
+   "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
+   "buttonColor": "#e0701a",
+   "advancedView": false,
+   "value": "{\"data\": \"beam_high_3m\"}"
+  },
+  "Publish!scene-beam-low-3m": {
+   "topicName": "/g1_wb/scene",
+   "datatype": "std_msgs/String",
+   "buttonText": "beam_low_3m",
+   "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
+   "buttonColor": "#e0701a",
+   "advancedView": false,
+   "value": "{\"data\": \"beam_low_3m\"}"
+  },
   "Tab!info": {
    "activeTabIdx": 0,
    "tabs": [
@@ -562,21 +580,31 @@
        "first": {
         "direction": "row",
         "first": "Publish!scene-course-mixed-25m",
-        "second": "Publish!scene-flat-walk-4m",
-        "splitPercentage": 50.0
+        "second": {
+         "direction": "row",
+         "first": "Publish!scene-flat-walk-4m",
+         "second": "Publish!scene-gap-044-exact",
+         "splitPercentage": 50.0
+        },
+        "splitPercentage": 33.333333333333336
        },
        "second": {
         "direction": "row",
-        "first": "Publish!scene-gap-044-exact",
-        "second": {
+        "first": {
          "direction": "row",
          "first": "Publish!scene-sidegap-corridor-048",
          "second": "Publish!scene-sidegap-plain-047",
          "splitPercentage": 50.0
         },
-        "splitPercentage": 33.333333333333336
+        "second": {
+         "direction": "row",
+         "first": "Publish!scene-beam-high-3m",
+         "second": "Publish!scene-beam-low-3m",
+         "splitPercentage": 50.0
+        },
+        "splitPercentage": 50.0
        },
-       "splitPercentage": 40.0
+       "splitPercentage": 42.857142857142854
       },
       "second": "Tab!info"
      }

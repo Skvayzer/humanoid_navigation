@@ -13,7 +13,8 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SCENES = sorted(p.stem for p in (HERE.parents[1] / 'cat' / 'wholebody' / 'scenes').glob('*.json')) + sys.argv[1:]
+SCENES = (sorted(p.stem for p in (HERE.parents[1] / 'cat' / 'wholebody' / 'scenes').glob('*.json'))
+          + sorted(p.stem for p in (HERE.parent / 'scenes').glob('*.json')) + sys.argv[1:])   # + real_robot/scenes (copied to the robot)
 
 SCRIPT = r'''// Splits the executor's JSON status (/g1_wb/status, 5 Hz) into fields for the Indicator and Plot panels.
 import { Input } from "./types";

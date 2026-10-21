@@ -42,7 +42,8 @@ def main():
     seconds = float(sys.argv[2]) if len(sys.argv) > 2 else float('inf')
     rclpy.init(); node = Node('g1_motor_recorder', namespace='g1_wb'); log = node.get_logger()
     deep = QoSProfile(depth=2000, history=HistoryPolicy.KEEP_LAST, reliability=ReliabilityPolicy.BEST_EFFORT)
-    low_sub = node.create_subscription(LowStateMsg, '/lowstate', lambda _: None, deep, raw=True)
+    low_node = Node('g1_motor_recorder_lowstate', namespace='g1_wb')      # never spun: the loop drains it itself
+    low_sub = low_node.create_subscription(LowStateMsg, '/lowstate', lambda _: None, deep, raw=True)
     take = rclpy_implementation.rclpy_take
     state, cmd = {}, {}
 
@@ -83,7 +84,7 @@ def main():
         rclpy.spin_once(node, timeout_sec=0.005)
         if time.time() - last > BLOCK_S:
             last = time.time(); flush()
-    flush(); node.destroy_node(); rclpy.shutdown()
+    flush(); low_node.destroy_node(); node.destroy_node(); rclpy.shutdown()
 
 
 if __name__ == '__main__':

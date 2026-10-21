@@ -72,7 +72,9 @@ drivers keep executing the last command they received.
 | run time (POLICY) | > 180 s |
 
 Remote (Unitree controller, read from `LowState.wireless_remote`): **L2+B = DAMP at any time** ·
-L1+Y = reset (DAMP → IDLE) · L1+A = stand · L1+X = balance (policy, goal = here) · R1+A = go · R1+B = stop
+L1+Y = reset (DAMP → IDLE) · L1+A = stand · L1+X = balance (policy, goal = here) · R1+A = go · R1+B = stop ·
+R1+X = joystick (left stick places the goal 0.5–1.5 m out with the deflection, 'forward' = the heading when the stick
+left the dead zone; centred = stand; two solvers give a new goal every ~0.35 s, each 0.7 s old; R1+B leaves it)
 (stand in place); all but L2+B must be held 0.5 s. The whole session from the remote:
 
 ```bash

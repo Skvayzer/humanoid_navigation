@@ -40,27 +40,30 @@ class DelayedFields:
     does: the control step never pays for the solve); service() solves outside the timed step; poll() delivers
     the result field_latency after the request."""
 
-    def __init__(self, scene, latency_s, clock):
+    def __init__(self, scene, latency_s, clock, n=1):
         self.scene, self.latency, self.clock = scene, latency_s, clock
-        self.pending = None; self.ready = None; self.solves = 0
+        self.n, self.max_pending = n, 1                 # as FieldWorker: up to n solves at once in joystick mode
+        self.queued, self.ready = [], []; self.solves = 0
 
     def request(self, base_xy, goal_xy):
-        if self.pending is not None or self.ready is not None:
+        if len(self.queued) + len(self.ready) >= min(self.max_pending, self.n):
             return False
-        self.pending = (self.clock(), np.array(base_xy, float), np.array(goal_xy, float))
+        self.queued.append((self.clock(), np.array(base_xy, float), np.array(goal_xy, float)))
         return True
 
     def service(self):
-        if self.pending is not None:
-            t, xy, goal = self.pending; self.pending = None
+        for t, xy, goal in self.queued:
             fields, used = solve_fields(xy, goal, self.scene.occupancy)
-            self.ready = (t + self.latency, fields, used); self.solves += 1
+            self.ready.append((t + self.latency, fields, used)); self.solves += 1
+        self.queued = []
 
     def poll(self):
-        if self.ready is not None and self.clock() >= self.ready[0]:
-            _, fields, goal = self.ready; self.ready = None
-            return fields, goal
-        return None
+        due = [r for r in self.ready if self.clock() >= r[0]]
+        if not due:
+            return None
+        self.ready = [r for r in self.ready if self.clock() < r[0]]
+        _, fields, goal = due[-1]                       # the newest answer that is due
+        return fields, goal
 
 
 def make_session(policy):
@@ -78,12 +81,12 @@ def gantry_schedule(t_go=11.0):
 def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0, 0.5, 0.4), seconds=40.,
         procedure='gantry', pose_hz=10., pose_latency_s=0.06, pose_noise=0.01, action_latency_s=0.010,
         field_latency_s=2.5, field_period_s=1.0, motor_kp_scale=0.9, true_mount='unitree_urdf', exec_mount='unitree_urdf',
-        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True, upper_filter='none', upper_alpha=0.5, upper_cutoff_hz=6.0, upper_rate=0.5):
+        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True, upper_filter='none', upper_alpha=0.5, upper_cutoff_hz=6.0, upper_rate=0.5, field_workers=1):
     contract = load_contract(); kin = FastKinematics(contract)
     clock = SimClock()
     scene_obj = VirtualScene(scene, anchor=anchor)
     planner = FieldPlanner(scene_obj, period=field_period_s)
-    fields = DelayedFields(scene_obj, field_latency_s, clock)
+    fields = DelayedFields(scene_obj, field_latency_s, clock, n=field_workers)
     xs = [scene_obj.start[0], scene_obj.goal[0]] + [b['center'][0] for b in scene_obj.boxes]
     ys = [scene_obj.start[1], scene_obj.goal[1]] + [b['center'][1] for b in scene_obj.boxes]
     fence = (min(xs) - fence_margin, max(xs) + fence_margin, min(ys) - fence_margin, max(ys) + fence_margin)
@@ -117,6 +120,8 @@ def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0
                 robot.gantry['length'] = HANG_LENGTH + value if value < 1 else 10.
             elif kind == 'buttons':
                 robot.buttons = tuple(value)
+            elif kind == 'sticks':                  # (lx, ly, rx, ry) of the remote
+                robot.sticks = tuple(value)
             elif kind == 'drop_lowstate':
                 log['drop_lowstate_until'] = now + value
             elif kind == 'freeze_pose':

@@ -15,6 +15,7 @@ Modes
 Active modes (STAND_UP..DAMP) publish every step, including DAMP: the motor drivers keep executing the last
 command they received, so the executor must keep sending damping instead of going quiet.
 """
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -24,7 +25,7 @@ import numpy as np
 from wholebody_core import ObservationBuilder
 from .frames import PelvisChain, heading, yaw_matrix
 from wholebody_core import quat_matrix
-from .lowlevel import LowCmd, NUM_BODY, remote_buttons
+from .lowlevel import LowCmd, NUM_BODY, remote_buttons, remote_sticks
 
 IDLE, SHADOW, STAND_UP, STAND, POLICY, DAMP = 'IDLE', 'SHADOW', 'STAND_UP', 'STAND', 'POLICY', 'DAMP'
 ACTIVE = (STAND_UP, STAND, POLICY, DAMP)
@@ -66,6 +67,11 @@ class Config:
     remote_stop: frozenset = frozenset({'R1', 'B'})
     remote_reset: frozenset = frozenset({'L1', 'Y'})   # DAMP -> IDLE
     remote_balance: frozenset = frozenset({'L1', 'X'}) # STAND -> POLICY, goal = here
+    remote_joy: frozenset = frozenset({'R1', 'X'})     # POLICY: the left stick moves the goal (like the demo's WASD)
+    joy_min_m: float = 0.5                  # goal distance just past the dead zone ...
+    joy_max_m: float = 1.5                  # ... and at full stick
+    joy_deadzone: float = 0.2
+    joy_update_m: float = 0.10              # re-plan when the wanted goal moved this much
     remote_hold_s: float = 0.5
     prefetch_radius_m: float = 2.0          # request the next waypoint's fields this far before the switch
     upper_filter: str = 'none'              # waist + arms command filter: none | avg2 | avg3 | median3 | ema | butter2 | rate
@@ -100,6 +106,8 @@ class Executor:
         self.budget_violations = 0
         self.held = {}                      # remote combo -> first time seen
         self.upper_state = None             # upper_filter memory (waist + arms)
+        self.joy = False                    # joystick mode: the left stick places the goal
+        self.joy_heading = None             # robot heading when the stick left the dead zone (its 'forward')
         self.last = {}                      # diagnostics of the last step
         self.log = []                       # per-step records (caller decides what to keep)
         self.imu_heading_hist = []          # (time, unwrapped IMU heading) for the last ~1 s
@@ -185,6 +193,13 @@ class Executor:
                 self.planner.hold_xy = None; self._request_fields(now, force=True)
                 self._resume()
                 return True
+        if name == 'joy' and self.mode == POLICY and self.last.get('pelvis_xy') is not None:
+            xy = np.asarray(self.last['pelvis_xy'])
+            self._set_joy(True); self.planner.hold_xy = None; self.planner.set_route(xy, xy)   # stand here until the stick moves
+            self.prefetched = None; self.next_field_request = 0.
+            self.reason = 'joystick'; return True
+        if name in ('stop', 'go', 'damp'):
+            self._set_joy(False)
         if name == 'stop' and self.mode in (POLICY, SHADOW) and self.last.get('pelvis_xy') is not None:
             self.planner.hold_xy = np.asarray(self.last['pelvis_xy']); self._request_fields(now, force=True)
             return True
@@ -224,6 +239,8 @@ class Executor:
             return False                    # damping is latched
         if mode != self.mode:
             self.mode, self.reason, self.mode_since = mode, reason, self.clock()
+            if mode != POLICY:
+                self._set_joy(False)
             if mode == POLICY:
                 self.policy_started = self.mode_since
         return True
@@ -370,7 +387,7 @@ class Executor:
         if self.cfg.remote_estop <= pressed:
             return 'damp'
         for name, combo in (('reset', self.cfg.remote_reset), ('stand', self.cfg.remote_stand), ('balance', self.cfg.remote_balance),
-                            ('go', self.cfg.remote_go), ('stop', self.cfg.remote_stop)):
+                            ('go', self.cfg.remote_go), ('stop', self.cfg.remote_stop), ('joy', self.cfg.remote_joy)):
             if combo <= pressed:
                 first = self.held.setdefault(name, now)
                 if now - first >= self.cfg.remote_hold_s:
@@ -398,6 +415,8 @@ class Executor:
             pelvis = self._pelvis(s)
             if pelvis is not None:
                 self.last['pelvis_xy'] = pelvis[0][:2].copy()
+                if self.joy and self.mode == POLICY:
+                    self._joystick(s, pelvis)
                 if self.planner.update(pelvis[0]):
                     self._advance(now)
                 self._request_fields(now)
@@ -473,6 +492,34 @@ class Executor:
                          goal=np.asarray(self.planner.goal, float).copy())
         return LowCmd.body(s.mode_machine, targets, self.c['kp'] * self.cfg.kp_scale, self.c['kd'], tau=ff)
 
+
+    def _set_joy(self, on):
+        """Joystick mode on/off; while on, the field source may solve several goals at once (fast goal updates)."""
+        self.joy, self.joy_heading = on, None
+        if hasattr(self.fields_source, 'max_pending'):
+            self.fields_source.max_pending = getattr(self.fields_source, 'n', 1) if on else 1
+
+    def _joystick(self, s, pelvis):
+        """The demo's WASD on the left stick: the goal goes out in the stick's direction, joy_min_m .. joy_max_m with
+        the deflection, relative to the heading the robot had when the stick left the dead zone (so 'forward' does
+        not turn with the robot), clipped into the geofence; stick centred -> goal = here."""
+        lx, ly, _, _ = remote_sticks(s.remote)
+        xy = pelvis[0][:2]; goal = self.planner.operator_goal; mag = min(1., math.hypot(lx, ly)); dz = self.cfg.joy_deadzone
+        if mag > dz:
+            if self.joy_heading is None:
+                self.joy_heading = heading(pelvis[2])
+            c, sn = math.cos(self.joy_heading), math.sin(self.joy_heading)
+            d = np.array([ly, -lx]) / math.hypot(lx, ly)             # stick right = robot's -y
+            dist = self.cfg.joy_min_m + (self.cfg.joy_max_m - self.cfg.joy_min_m) * (mag - dz) / (1 - dz)
+            want = xy + dist * np.array([c * d[0] - sn * d[1], sn * d[0] + c * d[1]])
+            fence, m = self.cfg.geofence, self.cfg.goal_fence_margin_m
+            if fence is not None:
+                want = np.clip(want, [fence[0] + m, fence[2] + m], [fence[1] - m, fence[3] - m])
+        else:
+            self.joy_heading = None
+            want = goal if goal is not None and np.linalg.norm(goal - xy) < self.cfg.joy_update_m else xy
+        if goal is None or np.linalg.norm(want - goal) > self.cfg.joy_update_m:
+            self.planner.set_route(xy, want); self.prefetched = None; self.next_field_request = 0.
 
     def _filter_upper(self, raw):
         """Commanded waist/arm targets (12..28) from the policy's: the policy keeps seeing its own targets in the

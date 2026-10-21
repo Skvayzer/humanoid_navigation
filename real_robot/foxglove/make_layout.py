@@ -95,7 +95,7 @@ def plot(paths, ymax):
 
 
 def button(topic, data, text, color, tip):
-    return dict(topicName=topic, datatype='std_msgs/msg/String', buttonText=text, buttonTooltip=tip, buttonColor=color,
+    return dict(topicName=topic, datatype='std_msgs/String', buttonText=text, buttonTooltip=tip, buttonColor=color,
                 advancedView=False, value=json.dumps({'data': data}))
 
 

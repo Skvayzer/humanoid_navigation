@@ -54,7 +54,7 @@ class FakeG1:
         self.rng = np.random.default_rng(seed)
         self.gantry = gantry                    # dict(anchor=[x, y, z], length=L, k=..., d=...) or None
         self.cmd = None; self.queue = []        # (apply_time, arrays)
-        self.bad_crc = 0; self.tick = 0; self.time = 0.; self.buttons = ()
+        self.bad_crc = 0; self.tick = 0; self.time = 0.; self.buttons = (); self.sticks = (0., 0., 0., 0.)
         x, y, yaw = start
         mujoco.mj_resetData(self.model, self.data)
         self.data.qpos[:3] = [x, y, .8]; self.data.qpos[3:7] = matrix_quat(yaw_matrix(yaw))
@@ -77,7 +77,7 @@ class FakeG1:
                         tau=d.actuator_force.copy(), motor_mode=np.ones(NUM_BODY, np.uint8), temperature=np.full(NUM_BODY, 40),
                         quat_wxyz=quat, gyro=d.sensordata[self.gyro_adr:self.gyro_adr + 3].copy(),
                         acc=d.sensordata[self.acc_adr:self.acc_adr + 3].copy(), rpy=np.zeros(3),
-                        remote=remote_bytes(*self.buttons), received=None)
+                        remote=remote_bytes(*self.buttons, sticks=self.sticks), received=None)
 
     def slam_pose(self, noise_xy=0., noise_yaw=0.):
         """T_map_body of the Mid-360 IMU now (truth through the TRUE mount), with optional noise."""

@@ -9,6 +9,7 @@
 import ctypes
 import os
 import platform
+import math
 import struct
 from pathlib import Path
 
@@ -217,9 +218,19 @@ def remote_buttons(remote):
     return frozenset(name for name, (byte, bit) in _BUTTONS.items() if remote[byte] >> bit & 1)
 
 
-def remote_bytes(*pressed):
-    """Inverse of remote_buttons (tests, simulated robot)."""
+def remote_sticks(remote):
+    """(lx, ly, rx, ry) of the Unitree remote, each in [-1, 1]: lx right +, ly forward + (unitree_sdk2py Joystick)."""
+    if remote is None or len(remote) < 24:
+        return 0., 0., 0., 0.
+    lx, rx, ry = struct.unpack_from('<3f', bytes(remote), 4); (ly,) = struct.unpack_from('<f', bytes(remote), 20)
+    return tuple(float(v) if math.isfinite(v) else 0. for v in (lx, ly, rx, ry))
+
+
+def remote_bytes(*pressed, sticks=(0., 0., 0., 0.)):
+    """Inverse of remote_buttons / remote_sticks (tests, simulated robot); sticks = (lx, ly, rx, ry)."""
     out = bytearray(40)
     for name in pressed:
         byte, bit = _BUTTONS[name]; out[byte] |= 1 << bit
+    lx, ly, rx, ry = sticks
+    struct.pack_into('<3f', out, 4, lx, rx, ry); struct.pack_into('<f', out, 20, ly)
     return bytes(out)

@@ -54,12 +54,12 @@ class ExecutorTest(unittest.TestCase):
         self.chain = PelvisChain(self.kin)
         return ex
 
-    def feed(self, ex, buttons=(), q=None, pelvis=None, pose=True):
+    def feed(self, ex, buttons=(), q=None, pelvis=None, pose=True, sticks=(0., 0., 0., 0.)):
         q = self.c['nominal'].copy() if q is None else q
         pos = np.r_[self.scene.start, .78] if pelvis is None else pelvis
         ex.on_lowstate(LowState(tick=int(self.clock.t * 500), mode_pr=0, mode_machine=5, q=q, dq=np.zeros(29), tau=np.zeros(29),
                                 motor_mode=np.ones(29), temperature=np.full(29, 40), quat_wxyz=np.array([1., 0, 0, 0]),
-                                gyro=np.zeros(3), acc=np.array([0, 0, 9.81]), rpy=np.zeros(3), remote=remote_bytes(*buttons),
+                                gyro=np.zeros(3), acc=np.array([0, 0, 9.81]), rpy=np.zeros(3), remote=remote_bytes(*buttons, sticks=sticks),
                                 received=self.clock.t))
         if pose:
             ex.on_slam_pose(self.chain.body_from_pelvis(pose_matrix(pos, [1, 0, 0, 0]), q), self.clock.t, received=self.clock.t)
@@ -234,6 +234,22 @@ class ExecutorTest(unittest.TestCase):
         self.assertFalse(ex.replace_world(FieldPlanner(self.scene)))   # walking: refused
         self.assertTrue(ex.command('stop')); self.assertTrue(ex.replace_world(FieldPlanner(self.scene)))
         self.assertIsNotNone(ex.planner.hold_xy)                       # still holding after the change
+
+
+    def test_joystick_moves_the_goal(self):
+        ex = self.make(geofence=(-3, 3, -3, 3)); self.to_policy(ex)
+        self.run_steps(ex, 30, buttons=('R1', 'X')); self.assertTrue(ex.joy)
+        start = np.asarray(ex.last['pelvis_xy'])
+        self.feed(ex, sticks=(0., 1., 0., 0.)); ex.step()                     # full forward: 1.5 m ahead (heading 0)
+        np.testing.assert_allclose(ex.planner.operator_goal, start + [1.5, 0.0], atol=0.05)
+        self.feed(ex, sticks=(1., 0., 0., 0.)); ex.step()                     # stick right: robot's -y
+        np.testing.assert_allclose(ex.planner.operator_goal, start + [0.0, -1.5], atol=0.05)
+        self.feed(ex, sticks=(0., 0., 0., 0.)); ex.step()                     # centred: stay here
+        np.testing.assert_allclose(ex.planner.operator_goal, start, atol=0.05)
+        self.run_steps(ex, 30, buttons=('R1', 'B')); self.assertFalse(ex.joy)  # stop leaves the joystick mode
+        self.run_steps(ex, 30, buttons=('R1', 'X'))
+        self.feed(ex, sticks=(0., 0.6, 0., 0.)); ex.step()                    # 0.6 deflection: 0.5 + 1.0 * 0.5 = 1.0 m
+        np.testing.assert_allclose(np.linalg.norm(ex.planner.operator_goal - start), 1.0, atol=0.05)
 
 
 if __name__ == '__main__':

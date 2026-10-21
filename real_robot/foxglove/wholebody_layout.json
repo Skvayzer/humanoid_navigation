@@ -337,7 +337,7 @@
   },
   "Publish!op-stand": {
    "topicName": "/g1_wb/operator",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "stand",
    "buttonTooltip": "IDLE -> STAND (remote L1+A)",
    "buttonColor": "#d08000",
@@ -346,7 +346,7 @@
   },
   "Publish!op-balance": {
    "topicName": "/g1_wb/operator",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "balance",
    "buttonTooltip": "STAND -> policy, goal = here (L1+X)",
    "buttonColor": "#1f9d3a",
@@ -355,7 +355,7 @@
   },
   "Publish!op-go": {
    "topicName": "/g1_wb/operator",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "go",
    "buttonTooltip": "walk to the goal (R1+A)",
    "buttonColor": "#1f9d3a",
@@ -364,7 +364,7 @@
   },
   "Publish!op-stop": {
    "topicName": "/g1_wb/operator",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "stop",
    "buttonTooltip": "goal = here (R1+B)",
    "buttonColor": "#d08000",
@@ -373,7 +373,7 @@
   },
   "Publish!op-damp": {
    "topicName": "/g1_wb/operator",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "damp",
    "buttonTooltip": "DAMP (L2+B is faster)",
    "buttonColor": "#e02020",
@@ -382,7 +382,7 @@
   },
   "Publish!op-reset": {
    "topicName": "/g1_wb/operator",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "reset",
    "buttonTooltip": "DAMP -> IDLE (L1+Y)",
    "buttonColor": "#707070",
@@ -391,7 +391,7 @@
   },
   "Publish!obstacles-virtual": {
    "topicName": "/g1_wb/obstacle_mode",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "obstacles: virtual",
    "buttonTooltip": "what the fields are made of (only while standing)",
    "buttonColor": "#e0701a",
@@ -400,7 +400,7 @@
   },
   "Publish!obstacles-real": {
    "topicName": "/g1_wb/obstacle_mode",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "obstacles: real",
    "buttonTooltip": "what the fields are made of (only while standing)",
    "buttonColor": "#606060",
@@ -409,7 +409,7 @@
   },
   "Publish!obstacles-both": {
    "topicName": "/g1_wb/obstacle_mode",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "obstacles: both",
    "buttonTooltip": "what the fields are made of (only while standing)",
    "buttonColor": "#2f6fdf",
@@ -418,7 +418,7 @@
   },
   "Publish!scene-course-mixed-25m": {
    "topicName": "/g1_wb/scene",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "course_mixed_25m",
    "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
    "buttonColor": "#e0701a",
@@ -427,7 +427,7 @@
   },
   "Publish!scene-flat-walk-4m": {
    "topicName": "/g1_wb/scene",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "flat_walk_4m",
    "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
    "buttonColor": "#e0701a",
@@ -436,7 +436,7 @@
   },
   "Publish!scene-gap-044-exact": {
    "topicName": "/g1_wb/scene",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "gap_044_exact",
    "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
    "buttonColor": "#e0701a",
@@ -445,7 +445,7 @@
   },
   "Publish!scene-sidegap-corridor-048": {
    "topicName": "/g1_wb/scene",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "sidegap_corridor_048",
    "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
    "buttonColor": "#e0701a",
@@ -454,7 +454,7 @@
   },
   "Publish!scene-sidegap-plain-047": {
    "topicName": "/g1_wb/scene",
-   "datatype": "std_msgs/msg/String",
+   "datatype": "std_msgs/String",
    "buttonText": "sidegap_plain_047",
    "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
    "buttonColor": "#e0701a",

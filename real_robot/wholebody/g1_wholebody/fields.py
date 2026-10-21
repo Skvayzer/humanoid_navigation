@@ -213,26 +213,33 @@ def _views(buf):
 
 
 class FieldWorker:
-    """Double-buffered field computation in a spawned process. poll() returns a new FieldGrid when one is ready.
-    The buffer the control loop is using is never written: requests always target the other slot."""
+    """Field computation in `n` spawned processes. poll() returns the newest FieldGrid when one is ready. The grid
+    the control loop is using is never written: each request takes a slot that is neither in use nor in flight.
+    max_pending = how many requests may be solved at once (1 normally; up to n for the joystick's fast goals)."""
 
-    def __init__(self, scene, **scene_kwargs):
+    def __init__(self, scene, n=1, **scene_kwargs):
         ctx = mp.get_context('spawn')                   # no fork of a process that has DDS threads
         size = 28 * int(np.prod(_SHAPE))
-        self.blocks = [shared_memory.SharedMemory(create=True, size=size) for _ in range(2)]
+        self.n = max(1, int(n)); self.max_pending = 1
+        self.blocks = [shared_memory.SharedMemory(create=True, size=size) for _ in range(self.n + 1)]
         self.views = [_views(b.buf) for b in self.blocks]
-        self.requests, self.results = ctx.Queue(), ctx.Queue()
+        self.queues, self.results = [ctx.Queue() for _ in range(self.n)], ctx.Queue()
         spec = scene.spec if isinstance(scene, VirtualScene) else load_scene(scene)
         if isinstance(scene, VirtualScene):
             scene_kwargs = dict(anchor=(scene.offset[0], scene.offset[1], scene.yaw), anchor_at_start=False,
                                 robot_perception=scene.robot_perception)
-        self.process = ctx.Process(target=_worker, args=(self.requests, self.results, [b.name for b in self.blocks],
-                                                         spec, scene_kwargs), daemon=True)
-        self.process.start()
-        self.in_use, self.pending, self.seq = None, None, 0
+        self.processes = [ctx.Process(target=_worker, args=(q, self.results, [b.name for b in self.blocks], spec, scene_kwargs),
+                                      daemon=True) for q in self.queues]
+        for pr in self.processes:
+            pr.start()
+        self.in_use, self.flight, self.seq, self.delivered, self.turn = None, {}, 0, 0, 0
         self.last_compute_s, self.last_error = None, None
         self.mode, self.scene, self.world_seq = 'virtual', scene, 0
         self.points_source = None       # real / both: callable -> (N, 3) map-frame points, or None when there are none fresh
+
+    @property
+    def pending(self):
+        return next(iter(self.flight.values()), None)
 
     def set_world(self, mode=None, scene=None):
         """Switch the obstacle source and/or the virtual scene. Answers to requests made before are dropped."""
@@ -246,10 +253,11 @@ class FieldWorker:
                           robot_perception=scene.robot_perception)
             self.scene = scene
         self.mode = mode; self.world_seq = self.seq + 1
-        self.requests.put(('world', mode, spec, kwargs))
+        for q in self.queues:
+            q.put(('world', mode, spec, kwargs))
 
     def request(self, base_xy, goal_xy):
-        if self.pending is not None:
+        if len(self.flight) >= min(self.max_pending, self.n):
             return False
         points = None
         if self.mode != 'virtual':
@@ -258,29 +266,35 @@ class FieldWorker:
                 self.last_error = 'no fresh real obstacle cloud'
                 return False
             points = np.asarray(points, np.float32)
-        slot = 0 if self.in_use != 0 else 1
-        self.seq += 1; self.pending = (self.seq, time.monotonic())
-        self.requests.put(('field', self.seq, slot, list(map(float, base_xy[:2])), list(map(float, goal_xy[:2])), points))
+        busy = {slot for slot, _ in self.flight.values()} | {self.in_use}
+        slot = next(i for i in range(len(self.blocks)) if i not in busy)
+        self.seq += 1; self.flight[self.seq] = (slot, time.monotonic())
+        self.queues[self.turn].put(('field', self.seq, slot, list(map(float, base_xy[:2])), list(map(float, goal_xy[:2])), points))
+        self.turn = (self.turn + 1) % self.n
         return True
 
     def poll(self):
         new = None
         while not self.results.empty():
             seq, slot, origin, dx, goal, seconds, error = self.results.get_nowait()
-            self.pending = None; self.last_compute_s = seconds; self.last_error = error
-            if seq < self.world_seq:            # solved for the previous scene / obstacle source
+            self.flight.pop(seq, None); self.last_compute_s = seconds; self.last_error = error
+            if seq < self.world_seq or seq < self.delivered:   # another world, or overtaken by a newer answer
                 continue
             if error is None:
                 sdf, gf, bf = self.views[slot]
-                self.in_use = slot
+                self.in_use, self.delivered = slot, seq
                 new = (FieldGrid(sdf, gf, bf, origin, dx), np.asarray(goal))
         return new
 
     def close(self):
         try:
-            self.requests.put(None); self.process.join(timeout=5)
+            for q in self.queues:
+                q.put(None)
+            for pr in self.processes:
+                pr.join(timeout=5)
         finally:
-            if self.process.is_alive():
-                self.process.terminate()
+            for pr in self.processes:
+                if pr.is_alive():
+                    pr.terminate()
             for b in self.blocks:
                 b.close(); b.unlink()

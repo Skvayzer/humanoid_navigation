@@ -82,7 +82,7 @@ def main():
     from sensor_msgs.msg import PointCloud2
     from tf2_ros import Buffer, TransformListener
     out_dir, name = sys.argv[1], sys.argv[2]
-    rclpy.init(); node = Node('map_builder', namespace='g1_slam'); log = node.get_logger()
+    rclpy.init(); node = Node('map_builder', namespace='g1_slam', cli_args=['--ros-args', '-r', 'tf:=/tf', '-r', 'tf_static:=/tf_static']); log = node.get_logger()
     acc = Accumulator(); path = []; lock = threading.Lock(); stop = threading.Event()
     tf = Buffer(); TransformListener(tf, node)
     node.create_subscription(PointCloud2, '/g1_slam/cloud_registered', lambda m: (lock.acquire(), acc.add(cloud_xyz(m)), lock.release()), 5)

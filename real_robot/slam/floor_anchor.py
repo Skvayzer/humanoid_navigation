@@ -48,7 +48,7 @@ def main():
     from tf2_ros import StaticTransformBroadcaster
     out_path = sys.argv[1] if len(sys.argv) > 1 else None
     rclpy.init()
-    node = Node('floor_anchor', namespace='g1_slam')
+    node = Node('floor_anchor', namespace='g1_slam', cli_args=['--ros-args', '-r', 'tf:=/tf', '-r', 'tf_static:=/tf_static'])   # Foxy: TF topics are relative
     log = node.get_logger()
     imu, clouds, odom = [], [], [None]
     node.create_subscription(Imu, '/g1/imu', lambda m: imu.append(([m.linear_acceleration.x, m.linear_acceleration.y, m.linear_acceleration.z],

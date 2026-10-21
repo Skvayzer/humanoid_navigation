@@ -10,6 +10,7 @@ Outputs  /lowcmd (unitree_hg/LowCmd) ONLY in STAND_UP/STAND/POLICY/DAMP and only
 Without --active the node can never publish /lowcmd (the publisher is not even created).
 """
 import argparse
+import array
 import json
 import signal
 import threading
@@ -47,6 +48,53 @@ def parse(argv=None):
     p.add_argument('--map-frame', default='map'); p.add_argument('--odom-frame', default='camera_init')
     p.add_argument('--log-dir', default=None)
     return p.parse_args(argv)
+
+
+class Recorder:
+    """Per-step log in preallocated arrays; full blocks are written (uncompressed) by a background thread.
+    The control loop only copies a few small arrays per step (no list of dicts, no compression in the loop)."""
+
+    FIELDS = dict(t=(), step_s=(), latency_s=(), mode=(), q=(29,), dq=(29,), gyro=(3,), quat=(4,), action=(29,),
+                  targets=(29,), command=(4,), pelvis_xy=(2,))
+    MODES = ('IDLE', 'SHADOW', 'STAND_UP', 'STAND', 'POLICY', 'DAMP')
+
+    def __init__(self, directory, block=500):
+        self.dir = Path(directory); self.dir.mkdir(parents=True, exist_ok=True); self.block = block
+        self.buf = self._new(); self.i = 0
+        import queue
+        self.queue = queue.Queue(maxsize=8)
+        self.thread = threading.Thread(target=self._writer, daemon=True); self.thread.start()
+
+    def _new(self):
+        return {k: np.zeros((self.block,) + shape, np.float32 if shape else np.float64) for k, shape in self.FIELDS.items()}
+
+    def add(self, **values):
+        b, i = self.buf, self.i
+        for k, v in values.items():
+            b[k][i] = v
+        self.i += 1
+        if self.i == self.block:
+            self.flush()
+
+    def flush(self):
+        if self.i:
+            try:
+                self.queue.put_nowait((self.buf, self.i))
+            except Exception:
+                pass                                         # disk too slow: drop a block rather than stall control
+            self.buf, self.i = self._new(), 0
+
+    def _writer(self):
+        while True:
+            item = self.queue.get()
+            if item is None:
+                return
+            buf, n = item
+            np.savez(self.dir / ('wholebody_%d.npz' % int(time.time() * 1000)), modes=np.array(self.MODES),
+                     **{k: v[:n] for k, v in buf.items()})
+
+    def close(self):
+        self.flush(); self.queue.put(None); self.thread.join(timeout=10)
 
 
 def policy_paths(name):
@@ -93,12 +141,17 @@ class Bridge:
         self.goal_pub = self.node.create_publisher(PoseStamped, '/g1_wb/goal', 1)
         self.String, self.PoseStamped, self.PointCloud2 = String, PoseStamped, PointCloud2
         from rclpy.executors import SingleThreadedExecutor
+        # No spin thread: Foxy's rclpy keeps the GIL while it waits, so a spinning thread stalls the 50 Hz loop
+        # (measured: 56 ms periods). The control loop drains callbacks itself, never blocking past its deadline.
         self.executor = SingleThreadedExecutor(); self.executor.add_node(self.node)
-        self.thread = threading.Thread(target=self._spin, daemon=True); self.thread.start()
 
-    def _spin(self):
-        while self.rclpy.ok():
-            self.executor.spin_once(timeout_sec=0.05)
+    def spin_until(self, deadline):
+        """Process callbacks until `deadline` (time.monotonic), in slices of at most 2 ms."""
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            self.executor.spin_once(timeout_sec=min(remaining, 0.002))
 
     # ------------------------------------------------------------- callbacks (cheap: store only)
     def _lowstate(self, raw):
@@ -173,7 +226,7 @@ class Bridge:
         m.height, m.width = 1, len(pts)
         m.fields = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, n in enumerate(('x', 'y', 'z', 'intensity'))]
         m.point_step, m.row_step, m.is_dense = 16, 16 * len(pts), True
-        m.data = pts.tobytes()
+        m.data = array.array('B', pts.tobytes())        # Foxy: assigning bytes validates every element (~40 ms)
         self.slice_pub.publish(m)
 
 
@@ -198,12 +251,12 @@ def main(argv=None):
     if args.anchor_at_robot:
         log.info('waiting for LowState + SLAM pose to anchor the scene at the robot ...')
         while rclpy.ok():
+            bridge.spin_until(time.monotonic() + 0.05)
             low, pose, _ = bridge.take()
             if low is not None and pose is not None:
                 state = decode_lowstate(low[0])
                 pos, quat, rot = chain.pelvis_pose(pose[0], state.q, state.quat_wxyz)
                 anchor = (float(pos[0]), float(pos[1]), heading(rot)); break
-            time.sleep(0.05)
     else:
         anchor = tuple(args.anchor)
     scene = VirtualScene(args.scene, anchor=anchor)
@@ -221,28 +274,19 @@ def main(argv=None):
     if args.start == 'shadow':
         ex.command('shadow')
 
-    log_dir = Path(args.log_dir) if args.log_dir else None
-    records = []; last_save = time.monotonic()
+    recorder = Recorder(args.log_dir) if args.log_dir else None
+    last_slice = None
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set()); signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    zeros29, zeros4, zeros2 = np.zeros(29), np.zeros(4), np.zeros(2)
 
-    def save():
-        if log_dir is None or not records:
-            return
-        log_dir.mkdir(parents=True, exist_ok=True)
-        keys = records[0].keys()
-        np.savez_compressed(log_dir / ('wholebody_%d.npz' % int(time.time())), **{k: np.array([r[k] for r in records]) for k in keys})
-        records.clear()
-
-    dt = contract['control_dt']; t0 = time.monotonic(); k = 0; overruns = 0; last_mode = ex.mode
+    dt = contract['control_dt']; t0 = time.monotonic(); k = 0; n = 0; overruns = 0; last_mode = ex.mode
     try:
         while not stop.is_set() and rclpy.ok():
-            k += 1; deadline = t0 + k * dt
-            delay = deadline - time.monotonic()
-            if delay > 0:
-                time.sleep(delay)
-            elif delay < -dt:
-                overruns += 1; t0 = time.monotonic(); k = 0          # fell behind: restart the schedule
+            k += 1; n += 1; deadline = t0 + k * dt    # k: schedule (reset on overrun), n: steps (periodic outputs)
+            if deadline - time.monotonic() < -dt:
+                overruns += 1; t0 = time.monotonic(); k = 0; deadline = t0  # fell behind: restart the schedule
+            bridge.spin_until(deadline)
             low, pose, cmds = bridge.take()
             now = time.monotonic()
             if low is not None:
@@ -258,14 +302,19 @@ def main(argv=None):
             if cmd is not None:
                 bridge.publish_lowcmd(cmd)
             if ex.mode != last_mode:
-                (log.error if ex.mode == rn.DAMP else log.info)('%s -> %s: %s' % (last_mode, ex.mode, ex.reason)); last_mode = ex.mode
+                text = '%s -> %s: %s' % (last_mode, ex.mode, ex.reason)
+                if ex.mode == rn.DAMP:          # Foxy: one call site must keep one severity
+                    log.error(text)
+                else:
+                    log.info(text)
+                last_mode = ex.mode
             L = ex.last
-            if log_dir is not None and ex.state is not None:
-                records.append(dict(t=now, mode=ex.mode, step_s=L.get('step_s', 0.), latency_s=L.get('latency_s') or 0.,
-                                    q=ex.state.q, dq=ex.state.dq, gyro=ex.state.gyro, quat=ex.state.quat_wxyz,
-                                    action=L.get('action', np.zeros(29)), targets=L.get('targets', np.zeros(29)),
-                                    command=L.get('command', np.zeros(4)), pelvis_xy=L.get('pelvis_xy', np.zeros(2))))
-            if k % 10 == 0:
+            if recorder is not None and ex.state is not None:
+                recorder.add(t=now, step_s=L.get('step_s', 0.), latency_s=L.get('latency_s') or 0.,
+                             mode=Recorder.MODES.index(ex.mode), q=ex.state.q, dq=ex.state.dq, gyro=ex.state.gyro,
+                             quat=ex.state.quat_wxyz, action=L.get('action', zeros29), targets=L.get('targets', zeros29),
+                             command=L.get('command', zeros4), pelvis_xy=L.get('pelvis_xy', zeros2))
+            if n % 10 == 0:
                 status = dict(mode=ex.mode, reason=ex.reason, step_ms=round(1e3 * L.get('step_s', 0.), 2),
                               latency_ms=round(1e3 * (L.get('latency_s') or 0.), 1), overruns=overruns,
                               pelvis_xy=np.round(L.get('pelvis_xy', [np.nan, np.nan]), 3).tolist(),
@@ -279,10 +328,9 @@ def main(argv=None):
                     bridge.pelvis_pub.publish(bridge.pose_msg(args.map_frame, pos, quat))
                     g = ex.planner.goal
                     bridge.goal_pub.publish(bridge.pose_msg(args.map_frame, [g[0], g[1], GOAL_Z], [1, 0, 0, 0]))
-            if k % 50 == 0 and ex.fields is not None:
+            if n % 50 == 25 and ex.fields is not None and ex.fields is not last_slice:
+                last_slice = ex.fields
                 bridge.publish_slice(ex.fields)
-            if now - last_save > 10:
-                save(); last_save = now
     finally:
         if args.active and ex.mode in rn.ACTIVE and ex.state is not None:
             ex.command('damp')                       # never go quiet while the motors hold policy targets
@@ -290,9 +338,11 @@ def main(argv=None):
                 cmd = ex.step(time.monotonic())
                 if cmd is not None:
                     bridge.publish_lowcmd(cmd)
-                time.sleep(dt)
+                bridge.spin_until(time.monotonic() + dt)
             log.error('shutdown: left the robot in DAMP')
-        save(); worker.close()
+        if recorder is not None:
+            recorder.close()
+        worker.close()
         bridge.node.destroy_node(); rclpy.shutdown()
 
 

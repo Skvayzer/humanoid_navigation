@@ -163,10 +163,28 @@ What it took (each found by this loop, none visible in `cat/wholebody_sim.py`, w
   the overrun watchdog; same results, 10x faster.
 
 
+### ROS 2 side on the laptop (Docker, Foxy amd64, 2026-10-21)
+
+| Check | Result |
+|---|---|
+| Executor image (`laptop.sh validate`, Python 3.8, numpy 1.24, ONNX Runtime 1.16.3) | `test_wholebody` 8/8 incl. ONNX action parity, executor tests 30/30 (SDK-library test skipped) |
+| Raw LowState decoder vs `rclpy.serialization` | identical (q, dq, tau, IMU, temperatures, remote, tick) |
+| walk1 replay → restamp → FAST_LIO_G1 → floor anchor → map builder | map 226 k points, 33.3 m path, floor RMS 1.7 cm |
+| End-position error (ICP of first/last scans, as in the report) | **7.2 cm (4.7 cm horizontal), 0.6°**; report: 7.8 cm (4.7 cm horizontal) |
+| NDT localisation in that map, same bag | vs the mapping trajectory: 1.8 cm mean, 4.2 cm p95, 4.9 cm max |
+| `ros_executor` vs `ros_fake_robot` over real topics, gantry procedure, corridor 0.48 m | reached the goal; 50 Hz loop: period 20.0 ms median / 20.7 ms max, step ≤ 8.8 ms, LowState age ≤ 12.8 ms, 0 overruns |
+| Remote L2+B over ROS | DAMP at once; damping commands (kp 0, kd ≥ 2, CRC) keep coming at 50 Hz |
+
+Bugs this run found and fixed (all would have hit the robot): Python TF in a namespaced Foxy node uses
+relative `tf`/`tf_static` (floor anchor/map builder published into `/g1_slam/tf_static`); a Foxy logger call
+site may not change severity (crashed the node at the first DAMP — it still left the motors damped); assigning
+`bytes` to a `uint8[]` field costs 40 ms in Foxy (field slice stalled the loop); the in-loop log compression
+(~60 ms every 10 s) and a schedule-reset bug stalled the loop until the LowState watchdog fired. Also: rosbag2
+(Foxy) cannot open a read-only bag (`laptop.sh` replays a working copy).
+
 ## Open items before the first active run
 
-1. **ROS/Docker side not run yet**: the images, `run_slam.sh`, the ROS nodes and the bag replay were written
-   while Docker was stopped on the laptop. Next: `laptop.sh build`, map + localise on walk1, `laptop.sh sim`.
+1. **Robot images**: `g1.sh build all` on the Jetson (arm64, vendor CycloneDDS) not done yet.
 2. **Jetson timing**: the control step is ~8–11 ms on the laptop; measure in `g1.sh wb shadow` (budget 18 ms).
 3. **LiDAR mount**: `robot_xml` (0.419 m, 0° pitch) vs Unitree URDF (0.428 m, 2.9° pitch). Record a bag with
    `/lowstate` to calibrate; walk1 has no joint states.

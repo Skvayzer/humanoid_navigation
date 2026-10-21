@@ -78,7 +78,8 @@ def main(argv=None):
     node.create_subscription(LowCmdMsg, '/lowcmd', on_cmd, 10)
     node.create_subscription(String, '/g1_fake/buttons', on_buttons, 10)
     node.create_subscription(Float32, '/g1_fake/rope', on_rope, 10)
-    threading.Thread(target=lambda: rclpy.spin(node), daemon=True).start()
+    from rclpy.executors import SingleThreadedExecutor
+    spinner = SingleThreadedExecutor(); spinner.add_node(node)      # drained in the physics loop (no GIL-holding thread)
     node.get_logger().info('fake G1: scene %s, gantry %s, pose %.0f Hz +%.0f ms' % (a.scene, a.gantry, a.pose_hz, 1e3 * a.pose_latency))
 
     pending = []; next_pose = 0.; next_low = 0.; t0 = time.monotonic(); dt = contract['physics_dt']
@@ -107,9 +108,11 @@ def main(argv=None):
             o.pose.pose.position.x, o.pose.pose.position.y, o.pose.pose.position.z = map(float, t[:3, 3])
             qq = matrix_quat(t[:3, :3]); o.pose.pose.orientation.w, o.pose.pose.orientation.x, o.pose.pose.orientation.y, o.pose.pose.orientation.z = map(float, qq)
             odom_pub.publish(o)
-        sleep = t0 + robot.time - time.monotonic()
-        if sleep > 0:
-            time.sleep(sleep)
+        while True:
+            sleep = t0 + robot.time - time.monotonic()
+            if sleep <= 0:
+                break
+            spinner.spin_once(timeout_sec=min(sleep, 0.001))
     node.destroy_node(); rclpy.shutdown()
 
 

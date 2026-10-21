@@ -24,9 +24,11 @@ slam_mounts=(--mount "type=bind,src=$out/maps,dst=/data/maps" --mount "type=bind
              --mount "type=bind,src=$repo/real_robot/config,dst=/opt/real_robot/config,readonly=true"
              --mount "type=bind,src=$repo/real_robot/slam,dst=/opt/real_robot/slam,readonly=true")
 
-play() {   # play <bag_dir> <name> <topics...>: bag player container (detached)
+play() {   # play <bag_dir> <name> <topics...>: bag player container (detached), on a working copy of the bag
   local bag="$1" name="$2"; shift 2
-  docker run -d --name "$name" "${base[@]}" --mount "type=bind,src=$(cd "$bag" && pwd),dst=/bag,readonly=true" \
+  local cache="$out/bag_cache/$(basename "$(cd "$bag" && pwd)")"   # rosbag2 (Foxy) cannot open sqlite read-only
+  [[ -f "$cache/bag/metadata.yaml" ]] || { mkdir -p "$cache"; cp -r "$bag/bag" "$cache/"; }
+  docker run -d --name "$name" "${base[@]}" --mount "type=bind,src=$cache,dst=/bag" \
     --entrypoint bash "$slam_image" -c "source /opt/ros/foxy/setup.bash && sleep 4 && ros2 bag play /bag/bag --topics $*" >/dev/null
 }
 record() { # record <name> <csv> : odometry + map->camera_init TF to CSV (python inside the SLAM image)
@@ -57,9 +59,9 @@ case "${1:-}" in
   sim)
     shift
     docker rm -f lap-fake lap-wb >/dev/null 2>&1 || true
-    docker run -d --name lap-fake "${base[@]}" "$wb_image" fake --gantry --scene "${SCENE:-sidegap_corridor_048}" >/dev/null
+    docker run -d --name lap-fake "${keep[@]}" "$wb_image" fake --gantry --scene "${SCENE:-sidegap_corridor_048}" >/dev/null
     sleep 3
-    docker run -d --name lap-wb "${base[@]}" --shm-size 256m --mount "type=bind,src=$out/logs,dst=/data/logs" "$wb_image" run \
+    docker run -d --name lap-wb "${keep[@]}" --shm-size 256m --mount "type=bind,src=$out/logs,dst=/data/logs" "$wb_image" run \
       --scene "${SCENE:-sidegap_corridor_048}" --anchor-at-robot --geofence-from-scene 1.0 --active --log-dir /data/logs "$@" >/dev/null
     sleep 5; docker logs lap-wb 2>&1 | tail -5
     echo "operator: laptop.sh op stand | balance | go | damp ...   rope: laptop.sh rope 0.05 | 9 ;  buttons: laptop.sh buttons L2,B" ;;

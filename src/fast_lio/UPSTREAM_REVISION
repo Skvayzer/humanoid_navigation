@@ -1,5 +1,5 @@
 FAST_LIO_G1 (G1 fork of hku-mars/FAST_LIO, branch ROS2 at a4743b0)
 repository: git@github.com:V-Roman-V/FAST_LIO_G1.git
 branch: g1
-commit: 916a59cf3e7c77252bbc80f2de9a9baac3420a26
-imported: 2026-10-21 into humanoid_navigation branch feature/g1-real-robot, replacing the snapshot Fast-LIO
+commit: f194a59f586f5bb26929c38b160b9abae27cf9c0
+imported: 2026-10-21 into humanoid_navigation branch feature/g1-real-robot (previous import: 916a59c)

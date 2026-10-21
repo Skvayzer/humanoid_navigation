@@ -59,6 +59,7 @@
 #endif
 #include <ikd-Tree/ikd_Tree.h>
 #include <voxel_map.h>
+#include <scan_patches.h>
 
 #define INIT_TIME           (0.1)
 #define LASER_POINT_COV     (0.001)
@@ -72,7 +73,10 @@ struct TimeLogRow
     int update_calls;           // h_share_model calls (iterations) of the scan
     double residual_mean;       // mean |point-to-plane residual| of the matched points [m]
     int map_new, map_rejected, map_candidates;
-    int voxel_matched;          // of the matched points: planes from the voxel map
+    int dist_matched;           // of the matched points: to a voxel distribution (map_type voxel)
+    int patches;                // of the down points: patch centroids (scan_patch.min_points > 0)
+    int group_matched;          // of the distribution matches: a merged group's
+    int merged_voxels;          // voxels in coplanar groups (voxel_map.merge_angle_deg > 0)
 };
 vector<TimeLogRow> time_log;
 string time_log_path;                     // runtime_pos_log_path; empty: <package source>/Log/fast_lio_time_log.csv
@@ -124,12 +128,27 @@ int map_new = 0, map_rejected = 0, map_candidates = 0;
 // stored one) or "first_point" (the first point in a voxel stays; no grid-dependent bias, see
 // results/mac/map_analysis).
 bool map_keep_first_point = false;
-// map_type: "ikdtree" (upstream: points, 5-NN plane fit per query), "voxel" (plane statistics per voxel,
-// see voxel_map.h) or "hybrid" (both: a trustworthy voxel plane where there is one, otherwise the 5-NN fit).
-bool use_ikdtree = true, use_voxel_planes = false;
+// map_type: "ikdtree" (upstream: points, 5-NN plane fit per query) or "voxel" (no ikd-Tree, see voxel_map.h:
+// the best-fitting voxel distribution, d2d for a scan patch and point-to-distribution for a single point,
+// otherwise a 5-NN plane fit on the points the voxels store).
+bool use_ikdtree = true;
 VoxelMap voxel_map;
-vector<uint8_t> plane_from_voxel;   // per point: its plane came from the voxel map (no 5-NN fit needed)
-int voxel_matched = 0;              // points matched to a voxel plane (last update iteration)
+// Per down point (map_type voxel): matched to a voxel distribution (no 5-NN search), that distribution
+// (mean, covariance), and whether it was a merged group's.
+vector<uint8_t> dist_matched;
+vector<V3D> dist_mean;
+vector<M3D> dist_cov;
+vector<uint8_t> from_group;
+int dist_match_count = 0, group_match_count = 0;   // last update iteration
+// scan_patch.min_points > 0 (scan_patches.h): a scan voxel with at least min_points points is one measurement,
+// its centroid with the points' covariance; sparser voxels keep all their points.
+int scan_patch_min_points = 0;
+const double PATCH_VAR_FLOOR = 0.02 * 0.02;   // [m^2] a centroid is never trusted more than a 2 cm std
+const double D2D_GATE = 11.34;                 // squared Mahalanobis distance: chi-square, 3 dof, 99 %
+vector<ScanPatch> scan_patches;               // per down point (n = 1: a single point)
+int scan_patch_count = 0;
+// Per down point: residual rows (1, or 3 for a distribution match) in normvec[3 i + k].
+vector<uint8_t> row_count;
 vector<double>       extrinT(3, 0.0);
 vector<double>       extrinR(9, 0.0);
 deque<double>                     time_buffer;
@@ -439,11 +458,11 @@ void voxel_map_incremental()
 
 void map_incremental()
 {
-    if (use_voxel_planes)
-        voxel_map_incremental();
     if (!use_ikdtree)
+    {
+        voxel_map_incremental();
         return;
-    const double voxel_time = use_voxel_planes ? kdtree_incremental_time : 0.0;
+    }
     PointVector PointToAdd;
     PointVector PointNoNeedDownsample;
     map_new = map_rejected = map_candidates = 0;
@@ -453,10 +472,6 @@ void map_incremental()
     {
         /* transform to world frame */
         pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
-        /* hybrid: a point matched to a voxel plane had no neighbour search (Nearest_Points is stale), and its
-           region is already in the ikd-Tree (the plane's first points went through the 5-NN path) */
-        if (plane_from_voxel[i])
-            continue;
         /* decide if need add to map: the map keeps about one point per filter_size_map voxel, the one
            closest to the voxel centre. Only the point's 5 nearest map neighbours that lie in its own
            voxel are considered:
@@ -508,7 +523,7 @@ void map_incremental()
     add_point_size = ikdtree.Add_Points(PointToAdd, true);
     ikdtree.Add_Points(PointNoNeedDownsample, false); 
     add_point_size = PointToAdd.size() + PointNoNeedDownsample.size();
-    kdtree_incremental_time = voxel_time + omp_get_wtime() - st_time;
+    kdtree_incremental_time = omp_get_wtime() - st_time;
 }
 
 // Publishes `cloud` as float32 x, y, z, intensity (16 B per point), each point mapped by `to_frame`
@@ -651,12 +666,82 @@ void publish_path(rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
     }
 }
 
+// Downsamples the deskewed scan into feats_down_body (filter_size_surf voxels in the lidar frame): one
+// centroid per voxel, or patches (scan_patch.min_points > 0). Sets feats_down_size.
+void downsample_scan()
+{
+    if (scan_patch_min_points > 0)
+        scan_patch_count = voxelize_scan(*feats_undistort, filter_size_surf_min, scan_patch_min_points,
+                                         *feats_down_body, scan_patches);
+    else
+    {
+        downSizeFilterSurf.setInputCloud(feats_undistort);
+        downSizeFilterSurf.filter(*feats_down_body);
+        scan_patch_count = 0;
+    }
+    feats_down_size = feats_down_body->points.size();
+}
+
+// Sizes the per-point arrays of the update to the downsampled scan.
+void resize_per_point_arrays()
+{
+    normvec->resize(3 * feats_down_size);
+    row_count.resize(feats_down_size);
+    scan_patches.resize(feats_down_size);   // without patches: all single points (n = 1)
+    if (!use_ikdtree)
+    {
+        dist_matched.resize(feats_down_size);
+        dist_mean.resize(feats_down_size);
+        dist_cov.resize(feats_down_size);
+        from_group.resize(feats_down_size);
+    }
+    feats_down_world->resize(feats_down_size);
+    Nearest_Points.resize(feats_down_size);
+    point_selected_surf.resize(feats_down_size);
+    res_last.resize(feats_down_size);
+    plane_coef.resize(feats_down_size);
+    plane_ok.resize(feats_down_size);
+    point_status.resize(feats_down_size);
+}
+
+// Distribution-to-distribution rows of down point i (world position p) against its matched voxel
+// distribution (dist_mean, dist_cov): W (p - mean), W = sqrt(R) C^(-1/2), C = Σ_map + R_wl Σ_patch R_wl' +
+// PATCH_VAR_FLOOR I (a single point: C = Σ_map + R I, point to distribution). Each row is a point-to-plane
+// row with "normal" W.row(k), so the update sees covariance C. Returns the squared Mahalanobis distance
+// r' C^-1 r.
+double set_d2d_rows(int i, const V3D &p, const M3D &R_wl)
+{
+    const M3D C = scan_patches[i].n > 1
+        ? M3D(dist_cov[i] + R_wl * scan_patches[i].cov * R_wl.transpose() + PATCH_VAR_FLOOR * M3D::Identity())
+        : M3D(dist_cov[i] + LASER_POINT_COV * M3D::Identity());
+    Eigen::SelfAdjointEigenSolver<M3D> es;
+    es.computeDirect(C);
+    const M3D W = std::sqrt(LASER_POINT_COV) * es.eigenvectors() *
+                  es.eigenvalues().cwiseInverse().cwiseSqrt().asDiagonal() * es.eigenvectors().transpose();
+    const V3D r = W * (p - dist_mean[i]);
+    row_count[i] = 3;
+    for (int k = 0; k < 3; k++)
+    {
+        PointType &row = normvec->points[3 * i + k];
+        row.x = W(k, 0);
+        row.y = W(k, 1);
+        row.z = W(k, 2);
+        row.intensity = r(k);
+    }
+    return r.squaredNorm() / LASER_POINT_COV;
+}
+
+// The interactive debug session (--replay ... --debug-port): works on the globals above.
+#include "debug_session.hpp"
+
 void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data)
 {
     double match_start = omp_get_wtime();
     laserCloudOri->clear(); 
-    corr_normvect->clear(); 
-    total_residual = 0.0; 
+    corr_normvect->clear();
+    total_residual = 0.0;
+    const M3D R_wl = s.rot.toRotationMatrix() * s.offset_R_L_I.toRotationMatrix();   // lidar to world
+    const bool researched = ekfom_data.converge;   // this iteration searches the map (debug recording)
 
     /** closest surface search and residual computation **/
     #ifdef MP_EN
@@ -682,26 +767,31 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
 
         auto &points_near = Nearest_Points[i];
 
-        if (ekfom_data.converge)
-            plane_from_voxel[i] = use_voxel_planes && voxel_map.plane_for(p_global, plane_coef[i]);
-        if (ekfom_data.converge && plane_from_voxel[i])
+        if (ekfom_data.converge && !use_ikdtree)
         {
-            /** A valid plane of the point's voxel or a neighbouring one **/
-            plane_ok[i] = true;
+            /* voxel map: the best-fitting distribution nearby, if it passes the gate */
+            const ScanPatch &sp = scan_patches[i];
+            const M3D meas_cov = sp.n > 1
+                ? M3D(R_wl * sp.cov * R_wl.transpose() + PATCH_VAR_FLOOR * M3D::Identity())
+                : M3D(LASER_POINT_COV * M3D::Identity());
+            double d2;
+            bool grouped = false;
+            dist_matched[i] = voxel_map.distribution_match(p_global, meas_cov, dist_mean[i], dist_cov[i], d2, &grouped) &&
+                d2 < D2D_GATE;
+            from_group[i] = dist_matched[i] && grouped;
+        }
+        if (ekfom_data.converge && !use_ikdtree && dist_matched[i])
+        {
             point_selected_surf[i] = true;
             point_status[i] = PT_MATCHED;
         }
-        else if (ekfom_data.converge && !use_ikdtree)
-        {
-            /** Voxel map only and no valid plane (status "no neighbours") **/
-            plane_ok[i] = false;
-            point_selected_surf[i] = false;
-            point_status[i] = PT_NO_NEIGHBOURS;
-        }
         else if (ekfom_data.converge)
         {
-            /** Find the closest surfaces in the map **/
-            ikdtree.Nearest_Search(point_world, NUM_MATCH_POINTS, points_near, pointSearchSqDis);
+            /** Find the closest surfaces in the map (voxel map: among the points its voxels store) **/
+            if (use_ikdtree)
+                ikdtree.Nearest_Search(point_world, NUM_MATCH_POINTS, points_near, pointSearchSqDis);
+            else
+                voxel_map.nearest(p_global, NUM_MATCH_POINTS, points_near, pointSearchSqDis);
             point_selected_surf[i] = points_near.size() < NUM_MATCH_POINTS ? false : pointSearchSqDis[NUM_MATCH_POINTS - 1] > 5 ? false : true;
             point_status[i] = point_selected_surf[i] ? PT_MATCHED : points_near.size() < NUM_MATCH_POINTS ? PT_NO_NEIGHBOURS : PT_FAR_NEIGHBOURS;
         }
@@ -711,7 +801,19 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
         const VF(4) &pabcd = plane_coef[i];
         point_selected_surf[i] = false;
         point_status[i] = PT_PLANE_FAIL;
-        if (ekfom_data.converge && !plane_from_voxel[i])
+        if (!use_ikdtree && dist_matched[i])
+        {
+            /** Against a voxel's distribution: d2d or point to distribution, gated **/
+            point_status[i] = PT_RESIDUAL_FAIL;
+            if (set_d2d_rows(i, p_global, R_wl) < D2D_GATE)
+            {
+                point_selected_surf[i] = true;
+                point_status[i] = PT_MATCHED;
+                res_last[i] = (p_global - dist_mean[i]).norm();   // 3-D distance (residual mean in the log)
+            }
+            continue;
+        }
+        if (ekfom_data.converge)
             plane_ok[i] = esti_plane(plane_coef[i], points_near, 0.1f);
         if (plane_ok[i])
         {
@@ -723,11 +825,13 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
             {
                 point_selected_surf[i] = true;
                 point_status[i] = PT_MATCHED;
-                normvec->points[i].x = pabcd(0);
-                normvec->points[i].y = pabcd(1);
-                normvec->points[i].z = pabcd(2);
-                normvec->points[i].intensity = pd2;
                 res_last[i] = abs(pd2);
+                row_count[i] = 1;
+                PointType &row = normvec->points[3 * i];
+                row.x = pabcd(0);
+                row.y = pabcd(1);
+                row.z = pabcd(2);
+                row.intensity = pd2;
             }
         }
     }
@@ -736,21 +840,30 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
     effct_feat_num = 0;
     update_calls++;
     std::fill(match_counts, match_counts + 5, 0);
-    voxel_matched = 0;
+    dist_match_count = group_match_count = 0;
     for (int i = 0; i < feats_down_size; i++)
     {
         match_counts[point_status[i]]++;
-        voxel_matched += point_selected_surf[i] && plane_from_voxel[i];
+        if (!use_ikdtree && point_selected_surf[i] && dist_matched[i])
+        {
+            dist_match_count++;
+            group_match_count += from_group[i];
+        }
     }
 
+    int matched_points = 0;
     for (int i = 0; i < feats_down_size; i++)
     {
         if (point_selected_surf[i])
         {
-            laserCloudOri->points.push_back(feats_down_body->points[i]);
-            corr_normvect->points.push_back(normvec->points[i]);
+            for (int k = 0; k < row_count[i]; k++)
+            {
+                laserCloudOri->points.push_back(feats_down_body->points[i]);
+                corr_normvect->points.push_back(normvec->points[3 * i + k]);
+            }
             total_residual += res_last[i];
-            effct_feat_num ++;
+            effct_feat_num += row_count[i];
+            matched_points++;
         }
     }
 
@@ -758,11 +871,12 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
     {
         ekfom_data.valid = false;
         std::cerr << "No Effective Points!" << std::endl;
-        // ROS_WARN("No Effective Points! \n");
+        if (dbg::session.recording)
+            dbg::session.record_iteration(s, researched);
         return;
     }
 
-    res_mean_last = total_residual / effct_feat_num;
+    res_mean_last = total_residual / matched_points;
     match_time  += omp_get_wtime() - match_start;
     double solve_start_  = omp_get_wtime();
     
@@ -801,6 +915,8 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
         ekfom_data.h(i) = -norm_p.intensity;
     }
     solve_time += omp_get_wtime() - solve_start_;
+    if (dbg::session.recording)
+        dbg::session.record_iteration(s, researched);
 }
 
 class LaserMappingNode : public rclcpp::Node
@@ -823,11 +939,15 @@ public:
         this->declare_parameter<double>("filter_size_map", 0.5);
         this->declare_parameter<string>("mapping.map_insert_rule", "closest_to_centre");
         this->declare_parameter<string>("map_type", "ikdtree");
-        this->declare_parameter<double>("voxel_map.size", 0.25);
+        this->declare_parameter<double>("voxel_map.size", 0.35);
         this->declare_parameter<int>("voxel_map.min_points", 20);
         this->declare_parameter<double>("voxel_map.max_thickness", 0.03);
         this->declare_parameter<double>("voxel_map.planarity", 0.05);
         this->declare_parameter<int>("voxel_map.max_points", 30);
+        this->declare_parameter<int>("voxel_map.stored_points", 10);
+        this->declare_parameter<double>("voxel_map.merge_angle_deg", 0.0);
+        this->declare_parameter<double>("voxel_map.merge_distance", 0.02);
+        this->declare_parameter<int>("scan_patch.min_points", 0);
         this->declare_parameter<double>("cube_side_length", 200.);
         this->declare_parameter<float>("mapping.det_range", 300.);
         this->declare_parameter<double>("mapping.gyr_cov", 0.1);
@@ -881,23 +1001,31 @@ public:
         map_keep_first_point = map_insert_rule == "first_point";
         string map_type;
         this->get_parameter_or<string>("map_type", map_type, "ikdtree");
-        if (map_type != "ikdtree" && map_type != "voxel" && map_type != "hybrid")
+        if (map_type != "ikdtree" && map_type != "voxel")
         {
-            RCLCPP_FATAL(this->get_logger(), "Unknown map_type '%s' (ikdtree, voxel, hybrid)", map_type.c_str());
+            RCLCPP_FATAL(this->get_logger(), "Unknown map_type '%s' (ikdtree, voxel)", map_type.c_str());
             throw std::invalid_argument("map_type");
         }
-        use_ikdtree = map_type != "voxel";
-        use_voxel_planes = map_type != "ikdtree";
+        use_ikdtree = map_type == "ikdtree";
         VoxelMap::Params vp;
-        this->get_parameter_or<double>("voxel_map.size", vp.size, 0.25);
+        this->get_parameter_or<double>("voxel_map.size", vp.size, 0.35);
         this->get_parameter_or<int>("voxel_map.min_points", vp.min_points, 20);
         this->get_parameter_or<double>("voxel_map.max_thickness", vp.max_thickness, 0.03);
         this->get_parameter_or<double>("voxel_map.planarity", vp.planarity, 0.05);
         this->get_parameter_or<int>("voxel_map.max_points", vp.max_points, 30);
+        this->get_parameter_or<int>("voxel_map.stored_points", vp.stored_points, 10);
+        vp.stored_points = std::min(vp.stored_points, VoxelMap::MAX_STORED);
+        this->get_parameter_or<double>("voxel_map.merge_angle_deg", vp.merge_angle_deg, 0.0);
+        this->get_parameter_or<double>("voxel_map.merge_distance", vp.merge_distance, 0.02);
         voxel_map.set_params(vp);
-        if (use_voxel_planes)
-            RCLCPP_INFO(this->get_logger(), "Map: %s, voxel planes, size %.2f m, min %d points, thickness <= %.3f m, planarity <= %.2f, frozen at %d points",
-                        map_type.c_str(), vp.size, vp.min_points, vp.max_thickness, vp.planarity, vp.max_points);
+        if (!use_ikdtree)
+            RCLCPP_INFO(this->get_logger(), "Map: voxel, size %.2f m, %d stored points (then a distribution), frozen at %d points, "
+                        "coplanar merging %s (%.1f deg, %.3f m)", vp.size, vp.stored_points, vp.max_points,
+                        vp.merge_angle_deg > 0 ? "on" : "off", vp.merge_angle_deg, vp.merge_distance);
+        this->get_parameter_or<int>("scan_patch.min_points", scan_patch_min_points, 0);
+        if (scan_patch_min_points > 0)
+            RCLCPP_INFO(this->get_logger(), "Scan patches: voxels with >= %d points as centroid + covariance",
+                        scan_patch_min_points);
         this->get_parameter_or<double>("cube_side_length",cube_len,200.f);
         this->get_parameter_or<float>("mapping.det_range",DET_RANGE,300.f);
         this->get_parameter_or<double>("mapping.gyr_cov",gyr_cov,0.1);
@@ -991,6 +1119,7 @@ public:
     {
         if (!sync_packages(Measures))
             return false;
+        dbg::session.scan_index++;
         if (flg_first_scan)
         {
             first_lidar_time = Measures.lidar_beg_time;
@@ -1022,18 +1151,14 @@ public:
             lasermap_fov_segment();
 
         /*** downsample the feature points in a scan ***/
-        downSizeFilterSurf.setInputCloud(feats_undistort);
-        downSizeFilterSurf.filter(*feats_down_body);
+        downsample_scan();
         t1 = omp_get_wtime();
-        feats_down_size = feats_down_body->points.size();
         /*** initialize the maps with the first scan ***/
-        const bool init_voxel = use_voxel_planes && voxel_map.empty();
-        if (init_voxel)
+        if (!use_ikdtree && voxel_map.empty())
         {
             RCLCPP_INFO(this->get_logger(), "Initialize the voxel map");
             voxel_map_incremental();
-            if (!use_ikdtree)
-                return true;
+            return true;
         }
         if(use_ikdtree && ikdtree.Root_Node == nullptr)
         {
@@ -1059,16 +1184,13 @@ public:
             return true;
         }
 
-        normvec->resize(feats_down_size);
-        feats_down_world->resize(feats_down_size);
-        Nearest_Points.resize(feats_down_size);
-        point_selected_surf.resize(feats_down_size);
-        res_last.resize(feats_down_size);
-        plane_coef.resize(feats_down_size);
-        plane_ok.resize(feats_down_size);
-        plane_from_voxel.resize(feats_down_size);
-        point_status.resize(feats_down_size);
+        resize_per_point_arrays();
         update_calls = 0;
+
+        /*** debug session: stop here at the requested scan, then carry on with the real update ***/
+        if (dbg::session.active() && !dbg::session.quit && dbg::session.scan_index >= dbg::session.target_scan &&
+            !dbg::session.serve(Measures.lidar_beg_time, lidar_end_time))
+            return true;
 
         /*** iterated state estimation ***/
         double t_update_start = omp_get_wtime();
@@ -1080,6 +1202,8 @@ public:
         geoQuat.y = state_point.rot.coeffs()[1];
         geoQuat.z = state_point.rot.coeffs()[2];
         geoQuat.w = state_point.rot.coeffs()[3];
+        if (dbg::session.active())
+            dbg::session.add_pose(lidar_end_time, state_point);
 
         double t_update_end = omp_get_wtime();
 
@@ -1111,7 +1235,7 @@ public:
                                 kdtree_delete_counter, kdtree_size_st, kdtree_size_end, add_point_size,
                                 feats_down_size, {match_counts[0], match_counts[1], match_counts[2], match_counts[3],
                                 match_counts[4]}, update_calls, res_mean_last, map_new, map_rejected, map_candidates,
-                                voxel_matched});
+                                dist_match_count, scan_patch_count, group_match_count, voxel_map.merged_voxels()});
             printf("[ mapping ]: time: IMU + Map + Input Downsample: %0.6f ave match: %0.6f ave solve: %0.6f  ave ICP: %0.6f  map incre: %0.6f ave total: %0.6f icp: %0.6f construct H: %0.6f \n",t1-t0,aver_time_match,aver_time_solve,t3-t1,t5-t3,aver_time_consu,aver_time_icp, aver_time_const_H_time);
         }
         return true;
@@ -1172,19 +1296,20 @@ void write_time_log()
     }
     fprintf(fp, "time_stamp, total time, scan point size, incremental time, search time, delete size, delete time, tree size st, tree size end, add point size, preprocess time, down points, "
                 "matched, no neighbours, far neighbours, plane fail, residual fail, update calls, residual mean, "
-                "map new, map rejected, map candidates, voxel plane matched\n");
+                "map new, map rejected, map candidates, distribution matched, patches, group matched, merged voxels\n");
     for (const auto &r : time_log)
-        fprintf(fp, "%0.8f,%0.8f,%d,%0.8f,%0.8f,%d,%0.8f,%d,%d,%d,%0.8f,%d,%d,%d,%d,%d,%d,%d,%0.6f,%d,%d,%d,%d\n", r.stamp,
+        fprintf(fp, "%0.8f,%0.8f,%d,%0.8f,%0.8f,%d,%0.8f,%d,%d,%d,%0.8f,%d,%d,%d,%d,%d,%d,%d,%0.6f,%d,%d,%d,%d,%d,%d,%d\n", r.stamp,
                 r.total, r.scan_points, r.incremental, r.search, r.delete_size, r.delete_time, r.tree_size_st,
                 r.tree_size_end, r.add_points, r.preprocess, r.down_points, r.matched[0], r.matched[1], r.matched[2],
                 r.matched[3], r.matched[4], r.update_calls, r.residual_mean, r.map_new, r.map_rejected, r.map_candidates,
-                r.voxel_matched);
+                r.dist_matched, r.patches, r.group_matched, r.merged_voxels);
     fclose(fp);
 }
 
 // Live:    fastlio_mapping --ros-args --params-file <config> ...
-// Offline: fastlio_mapping --replay <dataset.g1replay> <odom.tum> --ros-args --params-file <config> ...
+// Offline: fastlio_mapping --replay <dataset.g1replay> <odom.tum> [--map <map.pcd>] [--debug-port <port>] --ros-args ...
 //          feeds the dataset straight into the callbacks (no DDS, no timer) and exits; see replay.hpp.
+//          --map writes the final map; --debug-port serves the interactive debug session (debug_session.hpp).
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
@@ -1197,17 +1322,36 @@ int main(int argc, char** argv)
         fprintf(stderr, "fastlio_mapping was built without zlib: no --replay\n");
         return 2;
 #else
-        if (!(args.size() == 4 || (args.size() == 6 && args[4] == "--map")))
+        string map_out;
+        int debug_port = 0;
+        bool usage_ok = args.size() >= 4;
+        for (size_t i = 4; usage_ok && i < args.size(); i += 2)
         {
-            fprintf(stderr, "usage: fastlio_mapping --replay <dataset.g1replay> <odom.tum> [--map <map.pcd>] [--ros-args ...]\n");
+            if (i + 1 >= args.size())
+                usage_ok = false;
+            else if (args[i] == "--map")
+                map_out = args[i + 1];
+            else if (args[i] == "--debug-port")
+                debug_port = atoi(args[i + 1].c_str());
+            else
+                usage_ok = false;
+        }
+        if (!usage_ok)
+        {
+            fprintf(stderr, "usage: fastlio_mapping --replay <dataset.g1replay> <odom.tum> [--map <map.pcd>] [--debug-port <port>] [--ros-args ...]\n");
             return 2;
+        }
+        if (debug_port > 0)
+        {
+            dbg::session.port = debug_port;
+            dbg::session.start();
         }
         uint64_t poses_taken = 0;
         replay::Hooks hooks;
         hooks.imu = [](sensor_msgs::msg::Imu::UniquePtr m) { imu_cbk(std::move(m)); };
         hooks.lidar = [](sensor_msgs::msg::PointCloud2::UniquePtr m) { standard_pcl_cbk(std::move(m)); };
         hooks.process = [&node]() { return node->process_next_scan(); };
-        hooks.ok = []() { return rclcpp::ok(); };
+        hooks.ok = []() { return rclcpp::ok() && !dbg::session.quit; };
         hooks.new_pose = [&poses_taken](nav_msgs::msg::Odometry &odom) {
             if (odom_count == poses_taken)
                 return false;
@@ -1216,9 +1360,15 @@ int main(int argc, char** argv)
             return true;
         };
         ret = replay::run(args[2], args[3], hooks);
-        if (args.size() == 6)
+        if (debug_port > 0)
         {
-            map_file_path = args[5];
+            dbg::session.finish();
+            if (ret == 130 && dbg::session.quit)
+                ret = 0;   // the viewer ended the session
+        }
+        if (!map_out.empty())
+        {
+            map_file_path = map_out;
             if (!save_to_pcd())
                 fprintf(stderr, "could not write the map to %s\n", map_file_path.c_str());
         }

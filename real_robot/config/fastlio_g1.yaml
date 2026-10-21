@@ -1,14 +1,26 @@
-# real_robot/config/fastlio_g1.yaml: FAST_LIO_G1's g1_mid360.yaml (916a59c) for the whole-body pipeline.
-# Changed from it: [RR] lines. Unchanged: every estimator parameter of the colleague's evaluated config.
+# real_robot/config/fastlio_g1.yaml: FAST_LIO_G1's g1_mid360.yaml (f194a59) for the whole-body pipeline.
+# Changed from it: [RR] lines. Unchanged: every estimator parameter of the colleague's config.
 # Unitree G1, Mid-360 in the head, read from the vendor's ROS 2 stream.
-# Mapping parameters are the upstream mid360.yaml defaults; changed lines are marked [G1].
+# Mapping: the voxel-map configuration (results/mac/voxel2_study), indoor; outdoor: launch with
+# outdoor:=true (loads outdoor.yaml after this file). G1-specific lines are marked [G1].
 /**:
     ros__parameters:
         feature_extract_enable: false
-        point_filter_num: 3
         max_iteration: 3
-        filter_size_surf: 0.5
-        filter_size_map: 0.5
+        filter_size_surf: 0.35           # scan voxel [m] (outdoor 0.5)
+        filter_size_map: 0.5             # ikd-Tree map only
+        map_type: "voxel"                # voxel map (include/voxel_map.h); "ikdtree": the stock FAST-LIO map
+        voxel_map:
+            size: 0.35                   # map voxel edge [m] (outdoor 0.5)
+            stored_points: 10            # points kept per voxel; from this many on it has a distribution
+            max_points: 30               # the voxel freezes at this count (0: never)
+            merge_angle_deg: 0.0         # coplanar merging off: worse on the G1 walk (results/mac/voxel2_study)
+            merge_distance: 0.02
+            min_points: 20               # plane test for merging: points, std. deviation across [m], and
+            max_thickness: 0.03          #   smallest/middle eigenvalue ratio (rejects lines)
+            planarity: 0.05
+        scan_patch:
+            min_points: 5                # a scan voxel with >= 5 points is one measurement: centroid + covariance
         cube_side_length: 1000.0
         runtime_pos_log_enable: false    # [RR] no per-scan log files on the robot
         map_file_path: ""                # [G1]
@@ -23,11 +35,17 @@
             lidar_type: 2                # [G1] PointCloud2 with per-point `time` (float32) and `ring` (uint16)
             scan_line: 4
             blind: 0.5
+            point_keep_ratio: 0.5        # share of the points beyond blind kept (random, no fixed pattern)
             timestamp_unit: 3            # [G1] `time` is in ns
             scan_rate: 10
 
         mapping:
-            acc_cov: 0.1
+            # [G1] Process noise for walking, chosen on the G1 sequences (HR2-KILO, our walk;
+            # results/mac/imu_study): acc_cov 0.1 slips in the long corridor, and the values measured
+            # on the standing robot (10 min static /g1/imu, results/imu_restamp/2026-10-20_long:
+            # acc 2.4e-2 z, gyr 3.9e-6 x, bias walks 4.8e-5 / 3.4e-6, incl. the ~28 Hz fan vibration)
+            # are worse on turns and the short corridor: walking and turning are much noisier.
+            acc_cov: 0.3                 # [G1]
             gyr_cov: 0.1
             b_acc_cov: 0.0001
             b_gyr_cov: 0.0001

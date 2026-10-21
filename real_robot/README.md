@@ -9,7 +9,7 @@ What changed in the repository on this branch:
 
 | Path | Change |
 |---|---|
-| `src/fast_lio` | replaced by **FAST_LIO_G1** (commit `916a59c`, see `UPSTREAM_REVISION`, `manifests/fast_lio_g1.sha256`) |
+| `src/fast_lio` | replaced by **FAST_LIO_G1** (commit `f194a59`: voxel map, G1 IMU noise; see `UPSTREAM_REVISION`, `manifests/fast_lio_g1.sha256`) |
 | `src/g1_sensor_restamp` | new: IMU restamping node (`/utlidar/imu_livox_mid360` → `/g1/imu`) by R. Voronov, MIT |
 | `real_robot/` | new: everything below |
 | `tests/test_repository.py` | checks `src/fast_lio` against the FAST_LIO_G1 manifest instead of the old snapshot |
@@ -111,7 +111,7 @@ real_robot/scripts/g1.sh validate             # native tests incl. the timing ch
 SLAM image: 1.6 GB (was 3.7 GB): the runtime stage installs only the 12 PCL libraries the binaries link; `pcl_ros`/`pcl_conversions` are not linked but pulled all of `libpcl-dev` (PCL/VTK/Qt headers). rosbag2 is in the laptop-only `dev` stage. `build-robot` builds both images in parallel.
 Full emulated build from scratch: 97 min (`lidar_localization_ros2` alone 43 min); arm64 SLAM image 1.45 GB, executor 0.95 GB, archive for the robot 0.6 GB. A rebuild without changes takes seconds (all layers cached). The SLAM builder has one layer per
 package, ordered from stable/expensive to frequently changed: `livox_ros_driver2` → `ndt_omp_ros2` →
-`lidar_localization_ros2` (~40 min under QEMU) → `fast_lio` → `g1_sensor_restamp`. A change rebuilds only that
+`lidar_localization_ros2` (~40 min under QEMU) → `g1_sensor_restamp` → `fast_lio` (the one being updated). A change rebuilds only that
 package and the ones after it, and ccache (BuildKit cache mount) recompiles only the files that changed.
 Changes in `real_robot/` touch only light copy layers. On the robot's Docker 24 without buildx, `g1.sh build`
 strips the cache mounts (per-package layers still apply, ccache does not persist).
@@ -193,6 +193,7 @@ What it took (each found by this loop, none visible in `cat/wholebody_sim.py`, w
 | walk1 replay → restamp → FAST_LIO_G1 → floor anchor → map builder | map 226 k points, 33.3 m path, floor RMS 1.7 cm |
 | End-position error (ICP of first/last scans, as in the report) | **7.2 / 10.7 / 8.3 cm** in three real-time replays (4.7 / 7.3 / 6.3 cm horizontal, 0.6–1.1°); report: 7.8 cm (4.7 cm horizontal). Real-time playback + 3-thread matching is not deterministic |
 | NDT localisation in that map, same bag | vs the mapping trajectory: 1.8 cm mean, 4.2 cm p95, 4.9 cm max |
+| **FAST_LIO_G1 `f194a59`** (voxel map 0.35 m, `acc_cov` 0.3, keep ratio 0.5) on walk1 | end error **0.9 / 0.6 cm**, 0.29° (two replays; `916a59c`: 7.2–10.7 cm); map 240 k points, 32.1 m, floor RMS 1.6 cm; NDT vs mapping trajectory 0.9 cm mean, 1.5 cm max |
 | `ros_executor` vs `ros_fake_robot` over real topics, gantry procedure, corridor 0.48 m | reached the goal; 50 Hz loop: period 20.0 ms median / 20.7 ms max, step ≤ 8.8 ms, LowState age ≤ 12.8 ms, 0 overruns |
 | Remote L2+B over ROS | DAMP at once; damping commands (kp 0, kd ≥ 2, CRC) keep coming at 50 Hz |
 | Executor CPU with LowState at 500 Hz (as on the robot) | main process 17 % of a core idle, 30 % in POLICY (was ~100 %); field worker 100 % while solving |

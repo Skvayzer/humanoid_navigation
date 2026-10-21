@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-foxy-tf2-geometry-msgs ros-foxy-tf2-ros ros-foxy-tf2-sensor-msgs ros-foxy-visualization-msgs \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/g1_slam_ws
-# One layer per package, most stable / most expensive first: a change in one package rebuilds only that package
+# One layer per package, most stable first (FAST_LIO_G1 last: it is the one being updated): a change in one package rebuilds only that package
 # and the ones after it (lidar_localization_ros2 alone takes ~40 min under QEMU). ccache in a BuildKit cache mount
 # keeps object files across builds, so even a rebuilt package recompiles only the files that changed.
 # Legacy (non-BuildKit) builders: real_robot/scripts/g1.sh strips the cache mounts.
@@ -25,10 +25,10 @@ COPY src/ndt_omp_ros2 src/ndt_omp_ros2
 RUN --mount=type=cache,target=/ccache . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j${MAKE_JOBS} ${COLCON} ndt_omp_ros2
 COPY src/lidar_localization_ros2 src/lidar_localization_ros2
 RUN --mount=type=cache,target=/ccache . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j${MAKE_JOBS} ${COLCON} lidar_localization_ros2
-COPY src/fast_lio src/fast_lio
-RUN --mount=type=cache,target=/ccache . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j${MAKE_JOBS} ${COLCON} fast_lio
 COPY src/g1_sensor_restamp src/g1_sensor_restamp
 RUN --mount=type=cache,target=/ccache . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j${MAKE_JOBS} ${COLCON} g1_sensor_restamp
+COPY src/fast_lio src/fast_lio
+RUN --mount=type=cache,target=/ccache . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j${MAKE_JOBS} ${COLCON} fast_lio
 
 FROM ros:foxy-ros-base-focal AS runtime
 ENV DEBIAN_FRONTEND=noninteractive

@@ -1947,6 +1947,12 @@ public:
 		P_ = input_cov;
 	}
 
+	// The iteration limit at run time (the debug session; init_dyn_share must not be called twice).
+	void set_max_iteration(int maximum_iteration)
+	{
+		maximum_iter = maximum_iteration;
+	}
+
 	const state& get_x() const {
 		return x_;
 	}

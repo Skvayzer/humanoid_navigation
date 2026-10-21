@@ -109,7 +109,7 @@ real_robot/scripts/g1.sh validate             # native tests incl. the timing ch
 ```
 
 SLAM image: 1.6 GB (was 3.7 GB): the runtime stage installs only the 12 PCL libraries the binaries link; `pcl_ros`/`pcl_conversions` are not linked but pulled all of `libpcl-dev` (PCL/VTK/Qt headers). rosbag2 is in the laptop-only `dev` stage. `build-robot` builds both images in parallel.
-First full emulated build (old single-layer Dockerfile): 72 min. The SLAM builder has one layer per
+Full emulated build from scratch: 97 min (`lidar_localization_ros2` alone 43 min); arm64 SLAM image 1.45 GB, executor 0.95 GB, archive for the robot 0.6 GB. A rebuild without changes takes seconds (all layers cached). The SLAM builder has one layer per
 package, ordered from stable/expensive to frequently changed: `livox_ros_driver2` → `ndt_omp_ros2` →
 `lidar_localization_ros2` (~40 min under QEMU) → `fast_lio` → `g1_sensor_restamp`. A change rebuilds only that
 package and the ones after it, and ccache (BuildKit cache mount) recompiles only the files that changed.

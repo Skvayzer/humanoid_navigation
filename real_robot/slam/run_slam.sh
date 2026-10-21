@@ -10,9 +10,10 @@ set -u
 mode="${1:?odom|mapping <name>|localize <name>}"; name="${2:-}"
 cfg=/opt/real_robot/config; tools=/opt/real_robot/slam
 mkdir -p /data/logs /data/maps
-pids=()
+pids=(); relay=
 cleanup() {
   trap - INT TERM EXIT
+  [[ -z "$relay" ]] || kill -INT "$relay" 2>/dev/null || true
   for pid in "${pids[@]}"; do kill -INT "$pid" 2>/dev/null || true; done
   wait || true
 }
@@ -65,4 +66,7 @@ case "$mode" in
     echo "LOCALIZE in $name from its start pose." ;;
   *) echo "usage: $0 odom | mapping <name> | localize <name>" >&2; exit 2 ;;
 esac
+# viewer / executor clouds; not in pids: a relay crash must not stop SLAM (map_builder publishes the map when mapping)
+python3 "$tools/cloud_relay.py" $([[ "$mode" == mapping ]] && echo --no-map) > /data/logs/cloud_relay.log 2>&1 &
+relay=$!
 wait -n "${pids[@]}"; echo "a SLAM process exited; stopping the others (logs in /data/logs)" >&2

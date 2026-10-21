@@ -226,6 +226,15 @@ class ExecutorTest(unittest.TestCase):
         self.run_steps(ex, 5); self.run_steps(ex, 30, buttons=('R1', 'A'))
         self.assertEqual(ex.mode, rn.POLICY); self.assertIsNone(ex.planner.hold_xy)
 
+    def test_operator_goal_and_world_changes(self):
+        ex = self.make(geofence=(-1, 3, -1, 1)); self.to_policy(ex)
+        self.assertFalse(ex.set_goal((2.9, 0.0)))                      # 0.1 m from the fence: refused
+        self.assertTrue(ex.set_goal((2.0, 0.5)))
+        np.testing.assert_allclose(ex.planner.waypoints[-1], [2.0, 0.5])
+        self.assertFalse(ex.replace_world(FieldPlanner(self.scene)))   # walking: refused
+        self.assertTrue(ex.command('stop')); self.assertTrue(ex.replace_world(FieldPlanner(self.scene)))
+        self.assertIsNotNone(ex.planner.hold_xy)                       # still holding after the change
+
 
 if __name__ == '__main__':
     unittest.main()

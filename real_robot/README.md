@@ -138,7 +138,18 @@ Alternative (needs robot internet): `real_robot/scripts/g1.sh build all`, then `
 3. **Shadow.** `g1.sh wb shadow --scene sidegap_corridor_048 --anchor-at-robot`. Walk the robot with the
    Unitree controller; check `/g1_wb/status` (latency, step time, fields) and the logs. No motor output.
    Foxglove: `cat_bridge/scripts/perception.sh viz-start` (rosbridge), SSH tunnel as in `cat_bridge/README.md`,
-   layout `real_robot/foxglove/wholebody_layout.json` — the same view in shadow and active runs:
+   layout `real_robot/foxglove/wholebody_layout.json` (regenerate with `foxglove/make_layout.py`) — the same view in
+   shadow and active runs:
+   * the real room in grey (`/g1_slam/map`, 10 cm, from `slam/cloud_relay.py` in every SLAM mode) under the virtual
+     boxes; the live obstacle cloud `/g1_slam/obstacles` (4 cm, 4 m round the robot) can be switched on;
+   * buttons: operator commands, **obstacles virtual / real / both** (what the fields are made of: the scene's boxes,
+     the live cloud between 0.10 and 1.40 m, or both), and **one per scene** (`/g1_wb/scene`: laid out in front of
+     the robot where it stands; a JSON from the simulator dropped into `runtime/wholebody/scenes/` on the robot is
+     found by name, no rebuild). Scene and obstacle changes are refused while walking; 'real' is refused without a
+     fresh cloud, and a stale cloud stops field updates (the fields-stale watchdog then damps);
+   * a **goal by click**: 3D panel → Publish → Pose on the floor → `/g1_wb/goal_pose` → a straight route from the robot
+     (refused unless 0.3 m inside the geofence); standing robots wait for `go` (R1+A), a walking robot turns to it.
+   * the rest as before:
    * 3D, following the robot (TF `map → g1_wb_pelvis`): the virtual boxes (`esdf_map_virtual`, orange), the ESDF
      slice at 0.75 m (`/g1_wb/sdf_slice`, turbo, −0.1…1.2 m), the 13 body sites the policy samples
      (`/g1_wb/sites`, red = touching a virtual box … green ≥ 0.3 m), waypoints and path (green), geofence (red),

@@ -72,6 +72,7 @@ class Config:
     upper_alpha: float = 0.5                # ema: weight of the new target
     upper_cutoff_hz: float = 6.0            # butter2: 2nd-order Butterworth low-pass cutoff
     upper_rate: float = 0.5                 # rate: slew limit of the commanded target, rad/s
+    goal_fence_margin_m: float = 0.3        # an operator goal must lie this far inside the geofence
     hold_goal_tolerance_m: float = 0.5      # 'balance' starts the policy only on hold fields solved this close to here
     limits: Limits = field(default_factory=Limits)
 
@@ -189,6 +190,33 @@ class Executor:
             return True
         self.reason = 'refused: %s in %s' % (name, self.mode)
         return False
+
+    def set_goal(self, goal_xy, now=None):
+        """Operator goal (a click in the viewer): straight route from the pelvis. Standing robots keep standing until
+        'go'; a walking robot turns to it at once. Refused outside the geofence. True if accepted."""
+        now = self.clock() if now is None else now
+        xy = self.last.get('pelvis_xy'); g = np.asarray(goal_xy, float)[:2]; m = self.cfg.goal_fence_margin_m
+        if xy is None:
+            self.reason = 'refused goal: no pelvis pose'; return False
+        fence = self.cfg.geofence
+        if fence is not None and not (fence[0] + m <= g[0] <= fence[1] - m and fence[2] + m <= g[1] <= fence[3] - m):
+            self.reason = 'refused goal (%.2f, %.2f): not %.1f m inside the geofence' % (g[0], g[1], m); return False
+        self.planner.set_route(xy, g); self.prefetched = None
+        if self.mode == POLICY and self.planner.hold_xy is None:
+            self._request_fields(now, force=True)
+        self.reason = 'goal (%.2f, %.2f)' % (g[0], g[1])
+        return True
+
+    def replace_world(self, planner, now=None):
+        """New virtual scene or obstacle source (its planner = the scene's waypoints). Refused while walking; the
+        fields of the new world are asked for at once (answers for the old one are dropped by the source)."""
+        now = self.clock() if now is None else now
+        if self.mode == POLICY and self.planner.hold_xy is None:
+            self.reason = 'refused: change the world while standing (stop first)'; return False
+        planner.hold_xy = self.planner.hold_xy
+        self.planner, self.prefetched, self.inflight = planner, None, None
+        self._request_fields(now, force=True)
+        return True
 
     # ------------------------------------------------------------------ helpers
     def _enter(self, mode, reason):

@@ -10,6 +10,7 @@ never stall the 50 Hz control loop.
 import json
 import math
 import multiprocessing as mp
+import os
 import time
 from multiprocessing import shared_memory
 from pathlib import Path
@@ -21,11 +22,45 @@ from wholebody_fields import training_fields
 from wholebody_sim import DX, WINDOW, box_corners_test
 
 GOAL_Z = .75
+OBSTACLE_MODES = ('virtual', 'real', 'both')
+REAL_Z = (0.10, 1.40)          # real points kept as obstacles: above the floor, below the window top (as sim's robot_perception)
+
+
+def scene_dirs():
+    """Extra scenes first (G1_SCENES_DIR, e.g. runtime/wholebody/scenes on the robot: drop a sim JSON there), then the
+    training scenes shipped in cat/wholebody/scenes."""
+    extra = os.environ.get('G1_SCENES_DIR')
+    return ([Path(extra)] if extra else []) + [WHOLEBODY / 'scenes']
+
+
+def available_scenes():
+    names = []
+    for d in scene_dirs():
+        if d.is_dir():
+            names += [f.stem for f in sorted(d.glob('*.json')) if f.stem not in names]
+    return names
 
 
 def load_scene(name):
     path = Path(name)
-    return json.loads((path if path.suffix == '.json' else WHOLEBODY / 'scenes' / (name + '.json')).read_text())
+    if path.suffix == '.json':
+        return json.loads(path.read_text())
+    for d in scene_dirs():
+        if (d / (name + '.json')).is_file():
+            return json.loads((d / (name + '.json')).read_text())
+    raise FileNotFoundError('scene %s not in %s' % (name, ', '.join(map(str, scene_dirs()))))
+
+
+def points_occupancy(points, first_center, shape, z_range=REAL_Z):
+    """Real obstacle points (map frame, floor at z = 0) -> occupancy of the window: one voxel per point."""
+    occ = np.zeros(shape, bool)
+    if points is None or len(points) == 0:
+        return occ
+    p = np.asarray(points, float)
+    idx = np.floor((p - (np.asarray(first_center) - DX / 2)) / DX).astype(int)
+    ok = (idx >= 0).all(1) & (idx < np.asarray(shape)).all(1) & (p[:, 2] > z_range[0]) & (p[:, 2] < z_range[1])
+    occ[tuple(idx[ok].T)] = True
+    return occ
 
 
 class VirtualScene:
@@ -104,11 +139,19 @@ class FieldPlanner:
     """Waypoints + when to recompute (sim rules): every `period` s and whenever the active waypoint advances."""
 
     def __init__(self, scene, spacing=1.6, advance_radius=.8, reach_radius=.4, period=1.):
-        self.scene = scene
+        self.scene, self.spacing = scene, spacing
         self.waypoints = scene.waypoints(spacing)
+        self.operator_goal = self.route_start = None      # a goal set from the viewer instead of the scene's
         self.active = 0; self.advance_radius, self.reach_radius, self.period = advance_radius, reach_radius, period
         self.reached = False
         self.hold_xy = None            # operator 'stop': goal = where the robot is
+
+    def set_route(self, start_xy, goal_xy):
+        """Operator goal: a straight route from start_xy, waypoints every `spacing` as for a scene."""
+        s, g = np.asarray(start_xy, float)[:2], np.asarray(goal_xy, float)[:2]
+        d = g - s; n = max(1, int(math.ceil(np.linalg.norm(d) / self.spacing)))
+        self.waypoints = [s + d * (k / n) for k in range(1, n + 1)]
+        self.active, self.reached, self.operator_goal, self.route_start = 0, False, g, s
 
     @property
     def goal(self):
@@ -130,17 +173,28 @@ _SHAPE = tuple(WINDOW)
 
 
 def _worker(requests, results, names, scene_spec, scene_kwargs):
-    scene = VirtualScene(scene_spec, **scene_kwargs)
+    scene, mode = VirtualScene(scene_spec, **scene_kwargs), 'virtual'
     blocks = [shared_memory.SharedMemory(name=n) for n in names]
     views = [_views(b.buf) for b in blocks]
     while True:
         req = requests.get()
         if req is None:
             break
-        seq, slot, base_xy, goal_xy = req
+        if req[0] == 'world':                               # same queue as the requests: applied in order
+            _, mode, spec, kwargs = req
+            if spec is not None:
+                scene = VirtualScene(spec, **kwargs)
+            continue
+        _, seq, slot, base_xy, goal_xy, points = req
         t = time.monotonic()
+        if mode == 'virtual':
+            occupancy = scene.occupancy
+        elif mode == 'real':
+            occupancy = lambda first, shape: points_occupancy(points, first, shape)
+        else:
+            occupancy = lambda first, shape: scene.occupancy(first, shape) | points_occupancy(points, first, shape)
         try:
-            fields, goal = solve_fields(base_xy, goal_xy, scene.occupancy)
+            fields, goal = solve_fields(base_xy, goal_xy, occupancy)
             sdf, gf, bf = views[slot]
             sdf[...] = fields.sdf; gf[...] = fields.gf; bf[...] = fields.bf
             results.put((seq, slot, fields.origin.tolist(), fields.dx, goal.tolist(), time.monotonic() - t, None))
@@ -177,13 +231,36 @@ class FieldWorker:
         self.process.start()
         self.in_use, self.pending, self.seq = None, None, 0
         self.last_compute_s, self.last_error = None, None
+        self.mode, self.scene, self.world_seq = 'virtual', scene, 0
+        self.points_source = None       # real / both: callable -> (N, 3) map-frame points, or None when there are none fresh
+
+    def set_world(self, mode=None, scene=None):
+        """Switch the obstacle source and/or the virtual scene. Answers to requests made before are dropped."""
+        mode = self.mode if mode is None else mode
+        if mode not in OBSTACLE_MODES:
+            raise ValueError('obstacle mode %s' % mode)
+        spec = kwargs = None
+        if scene is not None:
+            spec = scene.spec
+            kwargs = dict(anchor=(scene.offset[0], scene.offset[1], scene.yaw), anchor_at_start=False,
+                          robot_perception=scene.robot_perception)
+            self.scene = scene
+        self.mode = mode; self.world_seq = self.seq + 1
+        self.requests.put(('world', mode, spec, kwargs))
 
     def request(self, base_xy, goal_xy):
         if self.pending is not None:
             return False
+        points = None
+        if self.mode != 'virtual':
+            points = self.points_source() if self.points_source is not None else None
+            if points is None:                  # never solve 'real' from nothing: it would read as free space
+                self.last_error = 'no fresh real obstacle cloud'
+                return False
+            points = np.asarray(points, np.float32)
         slot = 0 if self.in_use != 0 else 1
         self.seq += 1; self.pending = (self.seq, time.monotonic())
-        self.requests.put((self.seq, slot, list(map(float, base_xy[:2])), list(map(float, goal_xy[:2]))))
+        self.requests.put(('field', self.seq, slot, list(map(float, base_xy[:2])), list(map(float, goal_xy[:2])), points))
         return True
 
     def poll(self):
@@ -191,6 +268,8 @@ class FieldWorker:
         while not self.results.empty():
             seq, slot, origin, dx, goal, seconds, error = self.results.get_nowait()
             self.pending = None; self.last_compute_s = seconds; self.last_error = error
+            if seq < self.world_seq:            # solved for the previous scene / obstacle source
+                continue
             if error is None:
                 sdf, gf, bf = self.views[slot]
                 self.in_use = slot

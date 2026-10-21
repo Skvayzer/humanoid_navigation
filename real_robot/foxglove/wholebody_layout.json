@@ -2,12 +2,12 @@
  "configById": {
   "3D!wb": {
    "cameraState": {
-    "distance": 7,
+    "distance": 8,
     "perspective": true,
-    "phi": 50,
+    "phi": 55,
     "thetaOffset": -60,
     "targetOffset": [
-     0,
+     1.5,
      0,
      0
     ],
@@ -26,8 +26,8 @@
     "near": 0.01,
     "far": 500
    },
-   "followMode": "follow-position",
-   "followTf": "body",
+   "followMode": "follow-pose",
+   "followTf": "map",
    "scene": {
     "enableStats": false
    },
@@ -39,34 +39,31 @@
      "visible": false
     }
    },
+   "publish": {
+    "type": "pose",
+    "poseTopic": "/g1_wb/goal_pose",
+    "pointTopic": "/clicked_point",
+    "poseEstimateTopic": "/initialpose",
+    "poseEstimateXDeviation": 0.5,
+    "poseEstimateYDeviation": 0.5,
+    "poseEstimateThetaDeviation": 0.26
+   },
    "topics": {
     "/g1_slam/map": {
      "visible": true,
-     "pointSize": 2,
+     "pointSize": 2.5,
      "pointShape": "square",
      "decayTime": 0,
-     "colorField": "z",
-     "colorMode": "colormap",
-     "colorMap": "rainbow",
-     "explicitAlpha": 0.6
-    },
-    "/g1_cat/occupancy_cat": {
-     "visible": true,
-     "pointSize": 4,
-     "pointShape": "square",
-     "decayTime": 2.5,
      "colorMode": "flat",
-     "flatColor": "#ff3df5ff"
+     "flatColor": "#9a9a9acc"
     },
-    "/g1_cat/sdf_slice": {
+    "/g1_slam/obstacles": {
      "visible": false,
-     "pointSize": 6,
-     "colorField": "intensity",
-     "colorMode": "colormap",
-     "colorMap": "turbo",
-     "decayTime": 2.5,
-     "minValue": -0.1,
-     "maxValue": 1.2
+     "pointSize": 3,
+     "pointShape": "square",
+     "decayTime": 0,
+     "colorMode": "flat",
+     "flatColor": "#505050ff"
     },
     "/g1_wb/virtual_scene": {
      "visible": true
@@ -80,7 +77,8 @@
      "colorMode": "colormap",
      "colorMap": "turbo",
      "minValue": -0.1,
-     "maxValue": 1.2
+     "maxValue": 1.2,
+     "explicitAlpha": 0.6
     },
     "/g1_wb/sites": {
      "visible": true,
@@ -116,21 +114,25 @@
      ],
      "color": "#20e050ff"
     },
+    "/g1_wb/goal_pose": {
+     "visible": true,
+     "type": "arrow",
+     "arrowScale": [
+      0.4,
+      0.1,
+      0.1
+     ],
+     "color": "#e0d020ff"
+    },
     "/g1_slam/cloud_registered": {
+     "visible": false
+    },
+    "/g1_cat/occupancy_cat": {
      "visible": false,
-     "pointSize": 2,
-     "decayTime": 0,
+     "pointSize": 4,
+     "decayTime": 2.5,
      "colorMode": "flat",
-     "flatColor": "#c8c8c880"
-    },
-    "/g1_slam/path": {
-     "visible": false
-    },
-    "/g1_cat/boundary_preview": {
-     "visible": false
-    },
-    "/g1_cat/roi": {
-     "visible": false
+     "flatColor": "#ff3df5ff"
     }
    },
    "layers": {
@@ -237,6 +239,32 @@
     }
    ]
   },
+  "Indicator!obstacles": {
+   "path": "/studio_script/wb_status.obstacles",
+   "style": "background",
+   "fallbackColor": "#555555",
+   "fallbackLabel": "?",
+   "rules": [
+    {
+     "operator": "=",
+     "rawValue": "virtual",
+     "color": "#e0701a",
+     "label": "obstacles: VIRTUAL"
+    },
+    {
+     "operator": "=",
+     "rawValue": "real",
+     "color": "#606060",
+     "label": "obstacles: REAL"
+    },
+    {
+     "operator": "=",
+     "rawValue": "both",
+     "color": "#2f6fdf",
+     "label": "obstacles: VIRTUAL + REAL"
+    }
+   ]
+  },
   "Plot!timing": {
    "paths": [
     {
@@ -306,13 +334,160 @@
    ],
    "minLogLevel": 2,
    "topicToRender": "/rosout"
+  },
+  "Publish!op-stand": {
+   "topicName": "/g1_wb/operator",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "stand",
+   "buttonTooltip": "IDLE -> STAND (remote L1+A)",
+   "buttonColor": "#d08000",
+   "advancedView": false,
+   "value": "{\"data\": \"stand\"}"
+  },
+  "Publish!op-balance": {
+   "topicName": "/g1_wb/operator",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "balance",
+   "buttonTooltip": "STAND -> policy, goal = here (L1+X)",
+   "buttonColor": "#1f9d3a",
+   "advancedView": false,
+   "value": "{\"data\": \"balance\"}"
+  },
+  "Publish!op-go": {
+   "topicName": "/g1_wb/operator",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "go",
+   "buttonTooltip": "walk to the goal (R1+A)",
+   "buttonColor": "#1f9d3a",
+   "advancedView": false,
+   "value": "{\"data\": \"go\"}"
+  },
+  "Publish!op-stop": {
+   "topicName": "/g1_wb/operator",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "stop",
+   "buttonTooltip": "goal = here (R1+B)",
+   "buttonColor": "#d08000",
+   "advancedView": false,
+   "value": "{\"data\": \"stop\"}"
+  },
+  "Publish!op-damp": {
+   "topicName": "/g1_wb/operator",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "damp",
+   "buttonTooltip": "DAMP (L2+B is faster)",
+   "buttonColor": "#e02020",
+   "advancedView": false,
+   "value": "{\"data\": \"damp\"}"
+  },
+  "Publish!op-reset": {
+   "topicName": "/g1_wb/operator",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "reset",
+   "buttonTooltip": "DAMP -> IDLE (L1+Y)",
+   "buttonColor": "#707070",
+   "advancedView": false,
+   "value": "{\"data\": \"reset\"}"
+  },
+  "Publish!obstacles-virtual": {
+   "topicName": "/g1_wb/obstacle_mode",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "obstacles: virtual",
+   "buttonTooltip": "what the fields are made of (only while standing)",
+   "buttonColor": "#e0701a",
+   "advancedView": false,
+   "value": "{\"data\": \"virtual\"}"
+  },
+  "Publish!obstacles-real": {
+   "topicName": "/g1_wb/obstacle_mode",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "obstacles: real",
+   "buttonTooltip": "what the fields are made of (only while standing)",
+   "buttonColor": "#606060",
+   "advancedView": false,
+   "value": "{\"data\": \"real\"}"
+  },
+  "Publish!obstacles-both": {
+   "topicName": "/g1_wb/obstacle_mode",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "obstacles: both",
+   "buttonTooltip": "what the fields are made of (only while standing)",
+   "buttonColor": "#2f6fdf",
+   "advancedView": false,
+   "value": "{\"data\": \"both\"}"
+  },
+  "Publish!scene-course-mixed-25m": {
+   "topicName": "/g1_wb/scene",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "course_mixed_25m",
+   "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
+   "buttonColor": "#e0701a",
+   "advancedView": false,
+   "value": "{\"data\": \"course_mixed_25m\"}"
+  },
+  "Publish!scene-flat-walk-4m": {
+   "topicName": "/g1_wb/scene",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "flat_walk_4m",
+   "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
+   "buttonColor": "#e0701a",
+   "advancedView": false,
+   "value": "{\"data\": \"flat_walk_4m\"}"
+  },
+  "Publish!scene-gap-044-exact": {
+   "topicName": "/g1_wb/scene",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "gap_044_exact",
+   "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
+   "buttonColor": "#e0701a",
+   "advancedView": false,
+   "value": "{\"data\": \"gap_044_exact\"}"
+  },
+  "Publish!scene-sidegap-corridor-048": {
+   "topicName": "/g1_wb/scene",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "sidegap_corridor_048",
+   "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
+   "buttonColor": "#e0701a",
+   "advancedView": false,
+   "value": "{\"data\": \"sidegap_corridor_048\"}"
+  },
+  "Publish!scene-sidegap-plain-047": {
+   "topicName": "/g1_wb/scene",
+   "datatype": "std_msgs/msg/String",
+   "buttonText": "sidegap_plain_047",
+   "buttonTooltip": "lay this scene out in front of the robot (only while standing)",
+   "buttonColor": "#e0701a",
+   "advancedView": false,
+   "value": "{\"data\": \"sidegap_plain_047\"}"
+  },
+  "Tab!info": {
+   "activeTabIdx": 0,
+   "tabs": [
+    {
+     "title": "Status",
+     "layout": "RawMessages!status"
+    },
+    {
+     "title": "Timing",
+     "layout": "Plot!timing"
+    },
+    {
+     "title": "Fields",
+     "layout": "Plot!fields"
+    },
+    {
+     "title": "Log",
+     "layout": "RosOut!log"
+    }
+   ]
   }
  },
  "globalVariables": {},
  "userNodes": {
   "wb-status": {
    "name": "wb_status",
-   "sourceCode": "// Splits the executor's JSON status (/g1_wb/status, 5 Hz) into fields for the Indicator and Plot panels.\nimport { Input } from \"./types\";\n\nexport const inputs = [\"/g1_wb/status\"];\nexport const output = \"/studio_script/wb_status\";\n\ntype Output = {\n  mode: string;\n  rope: string;\n  reason: string;\n  policy_wait: string;\n  step_ms: number;\n  latency_ms: number;\n  overruns: number;\n  fields_age_s: number;\n  field_solve_s: number;\n  field_error: string;\n  waypoint: number;\n  latch: number;\n  reached: boolean;\n  hold: boolean;\n  field_hold: boolean;\n  goal_dist_m: number;\n  active_allowed: boolean;\n};\n\nconst num = (v: unknown): number => (typeof v === \"number\" ? v : NaN);\n\nexport default function script(event: Input<\"/g1_wb/status\">): Output | undefined {\n  let s: Record<string, unknown>;\n  try {\n    s = JSON.parse(event.message.data);\n  } catch {\n    return undefined;\n  }\n  const mode = String(s.mode ?? \"?\");\n  const xy = s.pelvis_xy as number[] | null;\n  const goal = s.field_goal as number[] | null;\n  const goalDist = xy && goal ? Math.hypot(xy[0] - goal[0], xy[1] - goal[1]) : NaN;\n  const wait = s.policy_wait == null ? \"\" : String(s.policy_wait);\n  // the gantry procedure: slacken the rope only once the policy itself is balancing\n  let rope = \"motors off\";\n  if (mode === \"STAND_UP\" || mode === \"STAND\") rope = \"KEEP ROPE: stiff stand\";\n  else if (mode === \"POLICY\" && wait !== \"\") rope = \"KEEP ROPE: policy waiting\";\n  // training stop latch: > 50 walking, 1..50 stopping, 0 standing still\n  else if (mode === \"POLICY\" && s.hold) rope = s.latch === 0 ? \"standing: rope may slacken\" : \"KEEP ROPE: settling\";\n  else if (mode === \"POLICY\") rope = \"walking\";\n  else if (mode === \"DAMP\") rope = \"DAMP\";\n  return {\n    mode, rope, reason: String(s.reason ?? \"\"), policy_wait: wait,\n    step_ms: num(s.step_ms), latency_ms: num(s.latency_ms), overruns: num(s.overruns),\n    fields_age_s: num(s.fields_age_s), field_solve_s: num(s.field_solve_s),\n    field_error: s.field_error == null ? \"\" : String(s.field_error),\n    waypoint: num(s.waypoint), latch: num(s.latch), reached: Boolean(s.reached), hold: Boolean(s.hold),\n    field_hold: Boolean(s.field_hold), goal_dist_m: goalDist,\n    active_allowed: Boolean(s.active_allowed),\n  };\n}\n"
+   "sourceCode": "// Splits the executor's JSON status (/g1_wb/status, 5 Hz) into fields for the Indicator and Plot panels.\nimport { Input } from \"./types\";\n\nexport const inputs = [\"/g1_wb/status\"];\nexport const output = \"/studio_script/wb_status\";\n\ntype Output = {\n  mode: string;\n  rope: string;\n  obstacles: string;\n  scene: string;\n  goal: string;\n  reason: string;\n  policy_wait: string;\n  step_ms: number;\n  latency_ms: number;\n  overruns: number;\n  fields_age_s: number;\n  field_solve_s: number;\n  field_error: string;\n  goal_dist_m: number;\n  waypoint: number;\n  latch: number;\n  reached: boolean;\n  hold: boolean;\n  active_allowed: boolean;\n};\n\nconst num = (v: unknown): number => (typeof v === \"number\" ? v : NaN);\n\nexport default function script(event: Input<\"/g1_wb/status\">): Output | undefined {\n  let s: Record<string, unknown>;\n  try {\n    s = JSON.parse(event.message.data);\n  } catch {\n    return undefined;\n  }\n  const mode = String(s.mode ?? \"?\");\n  const wait = s.policy_wait == null ? \"\" : String(s.policy_wait);\n  const xy = s.pelvis_xy as number[] | null;\n  const fg = s.field_goal as number[] | null;\n  const g = s.goal_xy as number[] | null;\n  // the gantry procedure: slacken the rope only once the policy itself stands still (training stop latch at 0)\n  let rope = \"motors off\";\n  if (mode === \"STAND_UP\" || mode === \"STAND\") rope = \"KEEP ROPE: stiff stand\";\n  else if (mode === \"POLICY\" && wait !== \"\") rope = \"KEEP ROPE: policy waiting\";\n  else if (mode === \"POLICY\" && s.hold) rope = s.latch === 0 ? \"standing: rope may slacken\" : \"KEEP ROPE: settling\";\n  else if (mode === \"POLICY\") rope = \"walking\";\n  else if (mode === \"DAMP\") rope = \"DAMP\";\n  return {\n    mode, rope, obstacles: String(s.obstacles ?? \"?\"), scene: String(s.scene ?? \"?\"),\n    goal: g ? `(${g[0].toFixed(2)}, ${g[1].toFixed(2)})` : \"scene goal\",\n    reason: String(s.reason ?? \"\"), policy_wait: wait,\n    step_ms: num(s.step_ms), latency_ms: num(s.latency_ms), overruns: num(s.overruns),\n    fields_age_s: num(s.fields_age_s), field_solve_s: num(s.field_solve_s),\n    field_error: s.field_error == null ? \"\" : String(s.field_error),\n    goal_dist_m: xy && fg ? Math.hypot(xy[0] - fg[0], xy[1] - fg[1]) : NaN,\n    waypoint: num(s.waypoint), latch: num(s.latch), reached: Boolean(s.reached), hold: Boolean(s.hold),\n    active_allowed: Boolean(s.active_allowed),\n  };\n}\n"
   }
  },
  "playbackConfig": {
@@ -320,31 +495,91 @@
  },
  "layout": {
   "direction": "row",
-  "splitPercentage": 66,
+  "splitPercentage": 62,
   "first": "3D!wb",
   "second": {
    "direction": "column",
-   "splitPercentage": 16,
+   "splitPercentage": 10,
    "first": {
     "direction": "row",
-    "splitPercentage": 40,
     "first": "Indicator!mode",
-    "second": "Indicator!rope"
+    "second": {
+     "direction": "row",
+     "first": "Indicator!rope",
+     "second": "Indicator!obstacles",
+     "splitPercentage": 50.0
+    },
+    "splitPercentage": 33.333333333333336
    },
    "second": {
     "direction": "column",
-    "splitPercentage": 52,
+    "splitPercentage": 12,
     "first": {
-     "direction": "column",
-     "splitPercentage": 50,
-     "first": "Plot!timing",
-     "second": "Plot!fields"
+     "direction": "row",
+     "first": {
+      "direction": "row",
+      "first": "Publish!op-stand",
+      "second": {
+       "direction": "row",
+       "first": "Publish!op-balance",
+       "second": "Publish!op-go",
+       "splitPercentage": 50.0
+      },
+      "splitPercentage": 33.333333333333336
+     },
+     "second": {
+      "direction": "row",
+      "first": "Publish!op-stop",
+      "second": {
+       "direction": "row",
+       "first": "Publish!op-damp",
+       "second": "Publish!op-reset",
+       "splitPercentage": 50.0
+      },
+      "splitPercentage": 33.333333333333336
+     },
+     "splitPercentage": 50.0
     },
     "second": {
      "direction": "column",
-     "splitPercentage": 55,
-     "first": "RawMessages!status",
-     "second": "RosOut!log"
+     "splitPercentage": 10,
+     "first": {
+      "direction": "row",
+      "first": "Publish!obstacles-virtual",
+      "second": {
+       "direction": "row",
+       "first": "Publish!obstacles-real",
+       "second": "Publish!obstacles-both",
+       "splitPercentage": 50.0
+      },
+      "splitPercentage": 33.333333333333336
+     },
+     "second": {
+      "direction": "column",
+      "splitPercentage": 14,
+      "first": {
+       "direction": "row",
+       "first": {
+        "direction": "row",
+        "first": "Publish!scene-course-mixed-25m",
+        "second": "Publish!scene-flat-walk-4m",
+        "splitPercentage": 50.0
+       },
+       "second": {
+        "direction": "row",
+        "first": "Publish!scene-gap-044-exact",
+        "second": {
+         "direction": "row",
+         "first": "Publish!scene-sidegap-corridor-048",
+         "second": "Publish!scene-sidegap-plain-047",
+         "splitPercentage": 50.0
+        },
+        "splitPercentage": 33.333333333333336
+       },
+       "splitPercentage": 40.0
+      },
+      "second": "Tab!info"
+     }
     }
    }
   }

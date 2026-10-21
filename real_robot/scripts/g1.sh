@@ -24,7 +24,7 @@ runtime="$workspace/runtime"
 slam_image=g1-rr-slam:latest; wb_image=g1-rr-wholebody:latest
 slam_name=g1-rr-slam; wb_name=g1-rr-wholebody
 dds="$repo/config/cyclonedds.xml"
-mkdir -p "$runtime/slam/maps" "$runtime/slam/logs" "$runtime/wholebody/logs"
+mkdir -p "$runtime/slam/maps" "$runtime/slam/logs" "$runtime/wholebody/logs" "$runtime/wholebody/scenes"
 # every check below goes through sudo docker; a failed password prompt would read as "container not running"
 sudo -n true 2>/dev/null || sudo -v || { echo "g1.sh needs sudo for docker: run it from a terminal (ssh -t)" >&2; exit 4; }
 
@@ -110,6 +110,7 @@ case "${1:-status}" in
     fi
     sudo docker run --detach --name "$wb_name" "${common[@]}" --cpus "${G1_WB_CPUS:-3}" ${G1_WB_CPUSET:+--cpuset-cpus "$G1_WB_CPUSET"} \
       --memory 3g --shm-size 256m --mount "type=bind,src=$runtime/wholebody/logs,dst=/data/logs" \
+      --mount "type=bind,src=$runtime/wholebody/scenes,dst=/data/scenes,readonly=true" -e G1_SCENES_DIR=/data/scenes \
       "$wb_image" run "$@" "${extra[@]}" --log-dir /data/logs >/dev/null
     sleep 3; sudo docker logs "$wb_name" 2>&1 | tail -5 ;;
   up)               # the whole stack once (SLAM odom, executor active in IDLE, Foxglove bridge, motor log); then the remote drives it

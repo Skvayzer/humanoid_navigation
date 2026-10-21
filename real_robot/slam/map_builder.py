@@ -64,6 +64,8 @@ class Accumulator:
 def view(pts, hits, voxel=VIEW_VOXEL, min_hits=2):
     """One point per coarse voxel (the first), only voxels seen in >= min_hits scans."""
     pts = pts[hits >= min_hits]
+    if len(pts) == 0:                                   # old numpy: unique(axis=0) fails on empty input
+        return pts
     _, first = np.unique(np.floor(pts / voxel).astype(np.int64), axis=0, return_index=True)
     return pts[first]
 

@@ -66,6 +66,38 @@ class FieldsTest(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_real_points_occupancy_keeps_obstacles_not_floor(self):
+        first = np.array([0.0, 0.0, DX / 2])
+        pts = np.array([[1.0, 1.0, 0.02], [1.0, 1.0, 0.5], [2.0, 2.0, 1.6]])     # floor, a box side, above the window
+        occ = fl.points_occupancy(pts, first, WINDOW)
+        self.assertEqual(int(occ.sum()), 1)
+        i = tuple(np.floor((pts[1] - (first - DX / 2)) / DX).astype(int)); self.assertTrue(occ[i])
+
+    def test_worker_switches_world_and_drops_old_answers(self):
+        scene = fl.VirtualScene('flat_walk_4m', anchor=(0.0, 0.0, 0.0))
+        wall = np.array([[x, 0.6, z] for x in np.arange(0.3, 1.5, 0.04) for z in np.arange(0.2, 1.2, 0.04)])
+        worker = fl.FieldWorker(scene); worker.points_source = lambda: wall
+        try:
+            def wait():
+                for _ in range(600):
+                    got = worker.poll()
+                    if got is not None:
+                        return got
+                    import time; time.sleep(0.05)
+                self.fail('worker timed out: %s' % worker.last_error)
+            self.assertTrue(worker.request(scene.start, scene.waypoints()[0]))     # virtual: empty floor
+            worker.set_world(mode='real')                                           # the answer above is now stale
+            import time; time.sleep(1.5)
+            self.assertIsNone(worker.poll())
+            self.assertTrue(worker.request(scene.start, scene.waypoints()[0]))
+            real, _ = wait()
+            near = real.sample(np.array([[0.9, 0.6, 0.6]]))[2][0]
+            self.assertLess(near, 0.05)                                             # the real wall is in the field
+            worker.points_source = lambda: None
+            self.assertFalse(worker.request(scene.start, scene.waypoints()[0]))    # never 'real' from no cloud
+        finally:
+            worker.close()
+
 
 if __name__ == '__main__':
     unittest.main()

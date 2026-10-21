@@ -128,10 +128,15 @@ class WholeBodyTest(unittest.TestCase):
         actions = session.run(None, {'obs': self.data['obs'].astype(np.float32)})[0]
         self.assertLess(float(np.abs(actions-self.data['action']).max()), 1e-5)
 
-    def test_robust_policy_variant(self):
-        """robust_delay_v1_u150: same runtime contract as the main policy, own ONNX hash, reproduces its training actions."""
+    def test_robust_policy_variants(self):
+        for name in ('robust_delay_v1_u150', 'robust_delay_v2_u552'):
+            with self.subTest(variant=name):
+                self._check_variant(name)
+
+    def _check_variant(self, name):
+        """A shipped variant: same runtime contract as the main policy, own ONNX hash, reproduces its training actions."""
         import hashlib, json
-        folder = Path(__file__).resolve().parents[1]/'wholebody'/'robust_delay_v1_u150'
+        folder = Path(__file__).resolve().parents[1]/'wholebody'/name
         variant = json.loads((folder/'policy_contract.json').read_text())
         main = json.loads((Path(__file__).resolve().parents[1]/'wholebody'/'policy_contract.json').read_text())
         own = {'name', 'checkpoint_sha256', 'policy_onnx', 'robustness'}

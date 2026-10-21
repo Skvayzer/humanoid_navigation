@@ -10,6 +10,7 @@ model that `checkpoint_manifest.json` pins. Nothing here commands motors.
 |---|---|---|
 | `wholebody/` | `generalist_finetune_v1_u596` | original; no action-latency training |
 | `wholebody/robust_delay_v1_u150/` | `generalist_robust_delay_v1_u150` | **action-delay and perturbation resistant** (0-20 ms delay, pose/mount noise, friction, mass); same contract and runtime -- see its README |
+| `wholebody/robust_delay_v2_u552/` | `generalist_robust_delay_v2_u552` | **action-delay and perturbation resistant, real-deployment randomisation** (0-40 ms delay, torso COM, torque offset, friction 0.2-1.2, + v1's); 0 falls up to 40 ms in sim-to-sim; skill comparison vs v1 pending -- see its README |
 
 ## Files
 

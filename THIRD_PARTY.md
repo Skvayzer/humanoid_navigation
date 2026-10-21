@@ -6,7 +6,9 @@ code. Do not assume that a public repository makes every component MIT-licensed.
 
 | Component | Included location | License / provenance |
 | --- | --- | --- |
-| Fast-LIO and bundled ikd-tree/IKFoM code | `src/fast_lio` | Retained GPL-2.0 and per-file notices; inspect `LICENSE` |
+| Fast-LIO and bundled ikd-tree/IKFoM code | `src/fast_lio` | FAST_LIO_G1 fork (R. Voronov) of hku-mars/FAST_LIO on branch feature/g1-real-robot; GPL-2.0 and per-file notices; see `LICENSE`, `UPSTREAM_REVISION` |
+| g1_sensor_restamp (IMU restamping node) | `src/g1_sensor_restamp` | MIT, Copyright (c) 2026 Roman Voronov; see its `LICENSE` |
+| G1 meshes for simulation only | not vendored (`unitree_ros/robots/g1_description/meshes`, fetched for MuJoCo videos) | Unitree's license; never part of an image |
 | NDT-OMP | `src/ndt_omp_ros2` | BSD-2-Clause; retained license |
 | LiDAR localization | `src/lidar_localization_ros2` | BSD-2-Clause; retained license |
 | Livox message interface | `src/livox_ros_driver2` | BSD-3-Clause package declaration; interface-only |

@@ -3,6 +3,7 @@
 # DDS stays on loopback (config/cyclonedds_laptop.xml) in domain $LAPTOP_DOMAIN (default 77).
 #
 #   laptop.sh build                          SLAM + executor(dev, with MuJoCo) images for amd64
+#   laptop.sh build-robot                    arm64 images for the Jetson (QEMU), validated, saved for g1.sh load
 #   laptop.sh validate                       executor image tests
 #   laptop.sh map <bag_dir> <name>           FAST_LIO_G1 mapping on a bag -> $OUT/maps/<name>.*
 #   laptop.sh localize <bag_dir> <name>      NDT localisation in <name> on a bag -> trajectory CSVs
@@ -39,8 +40,17 @@ wait_exit() { docker wait "$1" >/dev/null 2>&1 || true; }
 
 case "${1:-}" in
   build)
-    docker build -f "$repo/real_robot/docker/slam.Dockerfile" -t "$slam_image" "$repo"
-    docker build -f "$repo/real_robot/docker/wholebody.Dockerfile" --target dev -t "$wb_image" "$repo" ;;
+    docker build --platform linux/amd64 -f "$repo/real_robot/docker/slam.Dockerfile" -t "$slam_image" "$repo"
+    docker build --platform linux/amd64 -f "$repo/real_robot/docker/wholebody.Dockerfile" --target dev -t "$wb_image" "$repo" ;;
+  build-robot)      # arm64 images for the Jetson under QEMU (qemu-user-static), saved for g1.sh load
+    bash "$repo/scripts/fetch_runtime.sh"
+    docker build --platform linux/arm64 --build-arg MAKE_JOBS="${MAKE_JOBS:-6}" --build-arg COLCON_WORKERS="${COLCON_WORKERS:-2}" \
+      -f "$repo/real_robot/docker/slam.Dockerfile" -t g1-rr-slam:latest "$repo"
+    docker build --platform linux/arm64 -f "$repo/real_robot/docker/wholebody.Dockerfile" --target runtime -t g1-rr-wholebody:latest "$repo"
+    docker run --rm --platform linux/arm64 --network none g1-rr-wholebody:latest validate
+    mkdir -p "$out/images"
+    docker save g1-rr-slam:latest g1-rr-wholebody:latest | gzip -1 > "$out/images/g1_rr_images_arm64.tar.gz"
+    ls -la "$out/images" ;;
   validate) docker run --rm --network none "$wb_image" validate ;;
   map|localize|lio)
     bag="${2:?bag dir}"; name="${3:?name}"; topics="/utlidar/cloud_livox_mid360 /utlidar/imu_livox_mid360"

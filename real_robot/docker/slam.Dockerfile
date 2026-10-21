@@ -14,7 +14,10 @@ COPY src/fast_lio src/fast_lio
 COPY src/g1_sensor_restamp src/g1_sensor_restamp
 COPY src/ndt_omp_ros2 src/ndt_omp_ros2
 COPY src/lidar_localization_ros2 src/lidar_localization_ros2
-RUN . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j4 colcon build --merge-install \
+# Robot defaults; the laptop's arm64 (QEMU) build raises them: build-arg MAKE_JOBS / COLCON_WORKERS
+ARG MAKE_JOBS=4
+ARG COLCON_WORKERS=2
+RUN . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j${MAKE_JOBS} colcon build --merge-install --parallel-workers ${COLCON_WORKERS} \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 
 FROM ros:foxy-ros-base-focal AS runtime

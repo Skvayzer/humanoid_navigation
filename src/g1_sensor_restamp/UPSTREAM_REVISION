@@ -1,5 +1,5 @@
 g1_sensor_restamp by Roman Voronov (robot workspace ~/workspace/romanvoronov/ws on the G1)
 imported: 2026-10-21 from g1_traversal_policy/modules/g1_sensor_restamp (no VCS revision available)
-license: TODO in package.xml -- must be set by the author before this branch is published
+license: MIT (chosen by the team, 2026-10-21; LICENSE added)
 offline check: restamp_eval on walk1 raw IMU reproduces the recorded /g1/imu (99.97 % within 0.1 ms;
                the rest is 37 raw messages the bag recorder missed)

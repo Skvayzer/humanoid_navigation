@@ -10,7 +10,7 @@ What changed in the repository on this branch:
 | Path | Change |
 |---|---|
 | `src/fast_lio` | replaced by **FAST_LIO_G1** (commit `916a59c`, see `UPSTREAM_REVISION`, `manifests/fast_lio_g1.sha256`) |
-| `src/g1_sensor_restamp` | new: IMU restamping node (`/utlidar/imu_livox_mid360` → `/g1/imu`) by R. Voronov |
+| `src/g1_sensor_restamp` | new: IMU restamping node (`/utlidar/imu_livox_mid360` → `/g1/imu`) by R. Voronov, MIT |
 | `real_robot/` | new: everything below |
 | `tests/test_repository.py` | checks `src/fast_lio` against the FAST_LIO_G1 manifest instead of the old snapshot |
 
@@ -200,4 +200,3 @@ site may not change severity (crashed the node at the first DAMP — it still le
    before the first active run (publisher is RELIABLE, depth 1).
 5. **Development mode**: confirm on our G1 how the vendor controller is released (remote, or MotionSwitcher
    `ReleaseMode`); the executor deliberately never switches modes itself.
-6. **License** of `src/g1_sensor_restamp` (`TODO` in its package.xml) before publishing this branch.

@@ -2,6 +2,7 @@
 # One entry point for the whole-body pipeline on the G1 (run on the Jetson, from the repo checkout).
 #
 #   g1.sh build [slam|wholebody|all]          images (robot needs internet: README "Rebuilding")
+#   g1.sh load <archive.tar.gz>               images built on the laptop (laptop.sh build-robot) instead
 #   g1.sh validate                            offline tests inside the executor image (no network)
 #   g1.sh slam odom | mapping <name> | localize <name>      SLAM container g1-rr-slam (detached)
 #   g1.sh slam stop                           stop SLAM (mapping: waits for the map to be written)
@@ -40,9 +41,14 @@ case "${1:-status}" in
     what="${2:-all}"
     bash "$repo/scripts/fetch_runtime.sh"
     if [[ "$what" == slam || "$what" == all ]]; then
-      sudo docker build -f "$repo/real_robot/docker/slam.Dockerfile" -t "$slam_image" "$repo"; fi
+      sudo docker build --platform linux/arm64 -f "$repo/real_robot/docker/slam.Dockerfile" -t "$slam_image" "$repo"; fi
     if [[ "$what" == wholebody || "$what" == all ]]; then
-      sudo docker build -f "$repo/real_robot/docker/wholebody.Dockerfile" --target runtime -t "$wb_image" "$repo"; fi ;;
+      sudo docker build --platform linux/arm64 -f "$repo/real_robot/docker/wholebody.Dockerfile" --target runtime -t "$wb_image" "$repo"; fi ;;
+  load)             # images built on the laptop (laptop.sh build-robot): no robot internet, no compile here
+    archive="${2:?archive from laptop.sh build-robot}"
+    [[ "$(uname -m)" == aarch64 ]] || { echo "load is for the robot (arm64)" >&2; exit 2; }
+    sudo docker load -i "$archive"
+    for i in "$slam_image" "$wb_image"; do sudo docker image inspect "$i" --format "$i: {{.Architecture}} {{.Created}}"; done ;;
   validate)
     sudo docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,size=256m "$wb_image" validate ;;
   slam)

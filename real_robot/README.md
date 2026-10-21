@@ -148,7 +148,8 @@ Alternative (needs robot internet): `real_robot/scripts/g1.sh build all`, then `
       (2026-10-21, 15 min: p99 9.7 ms, max 19.1 ms, no watchdog trip — see open items)
 - [x] LiDAR mount decided: `unitree_urdf` (stock G1), the default
 - [ ] Gantry holds the robot, feet ~3 cm above the floor; a second person holds the E-stop
-- [ ] Robot in **development (debug) mode** with the Unitree remote, so the vendor controller no longer commands
+- [x] Robot in **development (debug) mode** with the Unitree remote, so the vendor controller no longer commands
+      (2026-10-21: `/lowcmd` 0 messages in 8 s, one idle vendor endpoint left; `/lowstate` 968 Hz, `mode_machine` 5)
 - [ ] Free floor measured in the map; `--geofence` inside it with ≥ 0.5 m margin; the virtual scene inside the geofence
 - [ ] `g1.sh slam localize <map>` (or `odom`) running, pose checked in Foxglove
 - [ ] `g1.sh wb active --scene flat_walk_4m --anchor-at-robot --geofence …`, then: `g1.sh op stand` (3 s) →
@@ -251,6 +252,6 @@ site may not change severity (crashed the node at the first DAMP — it still le
    selectable. If it is ever in doubt: the executor log now has the SLAM pose (`slam`, `slam_stamp`) next to the
    joints and the pelvis IMU, so a shadow run during mapping is enough to check the mount offline.
 4. ~~**`/lowcmd` QoS and type**~~: on the robot `unitree_hg/msg/LowCmd`, 2 vendor publishers (RELIABLE), 1 subscriber.
-5. **Development mode**: confirm on our G1 how the vendor controller is released (remote, or MotionSwitcher
+5. ~~**Development mode**~~: verified 2026-10-21 (remote, on the gantry): `/lowcmd` silent afterwards. Was: confirm on our G1 how the vendor controller is released (remote, or MotionSwitcher
    `ReleaseMode`); the executor deliberately never switches modes itself. Check: after the switch `/lowcmd`
    has no vendor publishers left. On the gantry only (the robot goes limp).

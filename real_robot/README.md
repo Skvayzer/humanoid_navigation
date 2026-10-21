@@ -126,6 +126,8 @@ Alternative (needs robot internet): `real_robot/scripts/g1.sh build all`, then `
 2. **Map.** Robot on the floor mark, still. `g1.sh slam mapping room1`, walk slowly through the room and
    back to the mark, `g1.sh slam stop` (writes `runtime/slam/maps/room1.{pcd,yaml}`).
    Next sessions: start on the same mark, same heading, `g1.sh slam localize room1`.
+   Alongside, `g1.sh wb shadow --scene flat_walk_4m --anchor-at-robot` and walk the robot along the scene once:
+   its log gives the Jetson step time while fields are solved and the data for an offline mount check.
 3. **Shadow.** `g1.sh wb shadow --scene sidegap_corridor_048 --anchor-at-robot`. Walk the robot with the
    Unitree controller; check `/g1_wb/status` (latency, step time, fields) and the logs. No motor output.
    Foxglove: `cat_bridge/scripts/perception.sh viz-start` (rosbridge), SSH tunnel as in `cat_bridge/README.md`,
@@ -134,15 +136,18 @@ Alternative (needs robot internet): `real_robot/scripts/g1.sh build all`, then `
 
 ### Checklist for the first active run (gantry)
 
-- [ ] `g1.sh validate` passes on the robot; `g1.sh wb shadow` ran ≥ 5 min: step < 15 ms, no overruns, latency < 20 ms
-- [ ] LiDAR mount decided (see open items), `--mount` set accordingly
+- [x] `g1.sh validate` passes on the robot; `g1.sh wb shadow` ran ≥ 5 min: step < 15 ms, no overruns, latency < 20 ms
+      (2026-10-21, 15 min: p99 9.7 ms, max 19.1 ms, no watchdog trip — see open items)
+- [x] LiDAR mount decided: `unitree_urdf` (stock G1), the default
 - [ ] Gantry holds the robot, feet ~3 cm above the floor; a second person holds the E-stop
 - [ ] Robot in **development (debug) mode** with the Unitree remote, so the vendor controller no longer commands
 - [ ] Free floor measured in the map; `--geofence` inside it with ≥ 0.5 m margin; the virtual scene inside the geofence
 - [ ] `g1.sh slam localize <map>` (or `odom`) running, pose checked in Foxglove
 - [ ] `g1.sh wb active --scene flat_walk_4m --anchor-at-robot --geofence …`, then: `g1.sh op stand` (3 s) →
-      lower until the feet carry weight → `g1.sh op balance` → slacken the rope → `g1.sh op go`
-- [ ] Any doubt: **L2+B** on the remote or `g1.sh op damp`
+      lower until the feet carry weight → `g1.sh op balance` → **wait until the status shows `policy_wait: null`**
+      (the policy has taken over; until then it is a stiff stand without balance) → slacken the rope → `g1.sh op go`
+- [ ] Any doubt: **L2+B** on the remote or `g1.sh op damp`. `stop` (R1+B) is not immediate: the robot walks on
+      until the fields of the hold point are solved (up to ~5 s on the Jetson)
 
 ## Verified so far (laptop, 2026-10-21)
 
@@ -174,6 +179,10 @@ late; motors 10 % weaker (kp × 0.9); virtual scene rotated 0.4 rad in the map. 
 
 40/40 reached the goal, 0 falls, 0 watchdog trips. Longest control step 15.5 ms with 6 simulations sharing the
 laptop; alone: POLICY step 2.9 ms median, 3.9 ms max (was 23.5 ms before `FastKinematics`).
+**This table was too optimistic** (seeds 0–2 only): 8 seeds per cell later showed two executor bugs, both in
+both mounts (flat 4 m 6–8/8, corridor 6/8 reached), fixed on 2026-10-21 (last two items below). After the fix,
+smoke check with the URDF mount: flat 4 m and corridor 0.48, seeds 0–1, 4/4 reached, 0 falls, 0 contacts,
+0.14–0.16 m drift during `balance` (was up to 1.1 m).
 
 What it took (each found by this loop, none visible in `cat/wholebody_sim.py`, which updates the pose every step):
 * **IMU heading between SLAM updates.** With the 10 Hz held, noisy pose alone the policy clipped the corridor
@@ -182,6 +191,14 @@ What it took (each found by this loop, none visible in `cat/wholebody_sim.py`, w
   the training stop latch froze it (flat 4 m: 0/3 reached); prefetch + re-arm on new fields: all reached.
 * **Fast kinematics.** The training FK re-parsed the MJCF on every call (~6 ms, 3 calls per step) and tripped
   the overrun watchdog; same results, 10x faster.
+* **New goal while stopping.** The worker solves one request at a time. When a waypoint switch came before its
+  fields, the policy stopped on the old fields (goal = the waypoint just reached); fields for the new goal arriving
+  during the 1 s stop phase were ignored (re-arm only after a full stop), and from then on the goal never changed:
+  standing for good, 15–25 % of runs. Now a new goal during the stop phase walks on (gait phase kept).
+* **`balance` walked.** The hold request at `balance` was refused while the worker was still busy, and the policy
+  started on the first waypoint's fields: ~1 m of walking with the rope still on. Now `stand` already solves
+  "stay here" (the hold point follows the robot on the gantry), and the policy starts only on hold fields;
+  otherwise it keeps the stand pose and the status shows `policy_wait`. The sim reports `hold_drift_m`.
 
 
 ### ROS 2 side on the laptop (Docker, Foxy amd64, 2026-10-21)
@@ -214,11 +231,17 @@ site may not change severity (crashed the node at the first DAMP — it still le
 
 ## Open items before the first active run
 
-1. **Robot images**: built for arm64 on the laptop (QEMU) with the vendor CycloneDDS; `g1.sh load` + `g1.sh validate` on the Jetson not done yet.
-2. **Jetson timing**: the control step is ~8–11 ms on the laptop; measure in `g1.sh wb shadow` (budget 18 ms).
-3. **LiDAR mount**: `robot_xml` (0.419 m, 0° pitch) vs Unitree URDF (0.428 m, 2.9° pitch). Record a bag with
-   `/lowstate` to calibrate; walk1 has no joint states.
-4. **`/lowcmd` QoS and type on the robot**: check with `ros2 topic info -v /lowcmd` against the vendor subscriber
-   before the first active run (publisher is RELIABLE, depth 1).
+1. ~~**Robot images**~~: done 2026-10-21 — `g1.sh load` of the laptop-built arm64 archive, `g1.sh validate` on
+   the Jetson: `test_wholebody` 8/8, executor tests 32/32 (incl. FK timing and the SDK CRC library).
+2. ~~**Jetson timing**~~: `g1.sh wb shadow` for 15 min (robot standing, SLAM odom): loop 50.0 Hz, period 20.0 ms
+   median / 21.5 ms p99 / 26.4 ms max; step 5.0 ms median / 9.7 ms p99 / 19.1 ms max (4 single steps > 18 ms, never
+   consecutive; the watchdog needs 5 in a row or one > 40 ms). Not measured yet: the step while the field worker
+   solves (robot walking through waypoints) — run shadow during the mapping walk.
+3. ~~**LiDAR mount**~~: our G1 is a stock robot, so `unitree_urdf` (Unitree's `g1_29dof_rev_1_0.urdf`, `mid360_joint`:
+   0.428 m, 2.93° pitch) is the default everywhere; `robot_xml` (0.419 m, 0°, the training model's site) remains
+   selectable. If it is ever in doubt: the executor log now has the SLAM pose (`slam`, `slam_stamp`) next to the
+   joints and the pelvis IMU, so a shadow run during mapping is enough to check the mount offline.
+4. ~~**`/lowcmd` QoS and type**~~: on the robot `unitree_hg/msg/LowCmd`, 2 vendor publishers (RELIABLE), 1 subscriber.
 5. **Development mode**: confirm on our G1 how the vendor controller is released (remote, or MotionSwitcher
-   `ReleaseMode`); the executor deliberately never switches modes itself.
+   `ReleaseMode`); the executor deliberately never switches modes itself. Check: after the switch `/lowcmd`
+   has no vendor publishers left. On the gantry only (the robot goes limp).

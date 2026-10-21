@@ -12,7 +12,7 @@
 #   g1.sh op <stand|balance|go|stop|damp|reset|shadow|idle>   operator command to the executor
 #   g1.sh status | logs [slam|wb]
 # executor args: --scene NAME (--anchor X Y YAW | --anchor-at-robot) [--geofence XMIN XMAX YMIN YMAX]
-#                [--policy u596|robust_delay_v1_u150] [--mount robot_xml|unitree_urdf]
+#                [--policy u596|robust_delay_v1_u150] [--mount unitree_urdf|robot_xml]
 # Everything on disk stays in $G1_WORKSPACE (default: the directory that contains this checkout).
 set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -22,6 +22,8 @@ slam_image=g1-rr-slam:latest; wb_image=g1-rr-wholebody:latest
 slam_name=g1-rr-slam; wb_name=g1-rr-wholebody
 dds="$repo/config/cyclonedds.xml"
 mkdir -p "$runtime/slam/maps" "$runtime/slam/logs" "$runtime/wholebody/logs"
+# every check below goes through sudo docker; a failed password prompt would read as "container not running"
+sudo -n true 2>/dev/null || sudo -v || { echo "g1.sh needs sudo for docker: run it from a terminal (ssh -t)" >&2; exit 4; }
 
 exists() { sudo docker container inspect "$1" >/dev/null 2>&1; }
 running() { [[ "$(sudo docker container inspect --format '{{.State.Running}}' "$1" 2>/dev/null)" == true ]]; }

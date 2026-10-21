@@ -51,7 +51,7 @@ class Limits:
 
 @dataclass
 class Config:
-    mount: str = 'robot_xml'
+    mount: str = 'unitree_urdf'
     kp_scale: float = 1.0
     damp_kd: Optional[np.ndarray] = None    # default: contract kd x 2
     stand_up_s: float = 3.0
@@ -66,6 +66,7 @@ class Config:
     remote_stop: frozenset = frozenset({'R1', 'B'})
     remote_hold_s: float = 0.5
     prefetch_radius_m: float = 2.0          # request the next waypoint's fields this far before the switch
+    hold_goal_tolerance_m: float = 0.5      # 'balance' starts the policy only on hold fields solved this close to here
     limits: Limits = field(default_factory=Limits)
 
 
@@ -84,7 +85,7 @@ class Executor:
         self.mode = IDLE
         self.reason = 'start'
         self.state = None; self.pose = None; self.prev_pose = None
-        self.fields = None; self.fields_time = None; self.field_goal = None; self.next_field_request = 0.
+        self.fields = None; self.fields_time = None; self.field_goal = None; self.field_hold = False; self.next_field_request = 0.
         self.inflight = None                # what the pending field request is for: ('current'|'next'|'hold', waypoint)
         self.prefetched = None              # (fields, goal, waypoint index) solved ahead of the waypoint switch
         self.mode_since = clock(); self.policy_started = None; self.builder_ready = False
@@ -149,13 +150,15 @@ class Executor:
                 return self._enter(IDLE, 'operator')
             return False                    # an active robot is never released silently: use damp
         if name == 'shadow' and self.mode == IDLE:
-            self.builder_ready = False
+            self.builder_ready = False; self.planner.hold_xy = None
             return self._enter(SHADOW, 'operator')
         if name == 'stand' and self.mode == IDLE:
             if not self.cfg.allow_active:
                 self.reason = 'refused: executor started without --active'; return False
             self._require_state(now)
             self.stand_from = self.state.q.copy()
+            if self.last.get('pelvis_xy') is not None:     # solve "stay here" while standing: ready for 'balance'
+                self.planner.hold_xy = np.asarray(self.last['pelvis_xy']); self._request_fields(now, force=True)
             return self._enter(STAND_UP, 'operator')
         if name == 'balance' and self.mode == STAND:
             # the policy takes over and stands in place (goal = here); 'go' then walks the scene
@@ -172,8 +175,7 @@ class Executor:
                 return self._enter(POLICY, 'operator')
             if self.mode == POLICY and self.planner.hold_xy is not None:
                 self.planner.hold_xy = None; self._request_fields(now, force=True)
-                if self.builder.stop <= 0:
-                    self.builder.rearm()
+                self._resume()
                 return True
         if name == 'stop' and self.mode in (POLICY, SHADOW) and self.last.get('pelvis_xy') is not None:
             self.planner.hold_xy = np.asarray(self.last['pelvis_xy']); self._request_fields(now, force=True)
@@ -214,6 +216,8 @@ class Executor:
             return
         p = self.planner
         if p.hold_xy is not None:
+            if self.mode in (STAND_UP, STAND):
+                p.hold_xy = np.asarray(xy, float).copy()     # on the gantry the hold point follows the robot
             kind, index, goal = 'hold', p.active, p.hold_xy
         else:
             kind, index, goal = 'current', p.active, p.waypoints[p.active]
@@ -228,14 +232,14 @@ class Executor:
                 if kind != 'next':
                     self.next_field_request = now + p.period
 
-    def _take_fields(self, now, fields, goal):
+    def _take_fields(self, now, fields, goal, hold=False):
         previous_goal = self.field_goal
-        self.fields, self.field_goal = fields, goal; self.fields_time = now
+        self.fields, self.field_goal, self.field_hold = fields, goal, hold; self.fields_time = now
         moved = previous_goal is None or np.linalg.norm(np.asarray(goal)[:2] - np.asarray(previous_goal)[:2]) > .05
         # training's stop latch keeps a stopped robot standing; a new goal (fields that arrived after the robot had
-        # already stopped, as with slow field solves) re-arms it, unless the scene is done
-        if moved and self.builder_ready and self.builder.stop <= 0 and not self.planner.reached:
-            self.builder.rearm()
+        # started stopping on the old goal's fields, as with slow field solves) resumes it, unless the scene is done
+        if moved and self.builder_ready and not self.planner.reached and self.planner.hold_xy is None:
+            self._resume()
 
     def _poll_fields(self, now):
         new = self.fields_source.poll()
@@ -250,11 +254,11 @@ class Executor:
             elif index == p.active:
                 self._take_fields(now, fields, goal)          # the switch happened while it was being solved
         elif kind == 'hold' and p.hold_xy is not None:
-            self._take_fields(now, fields, goal)
+            self._take_fields(now, fields, goal, hold=True)
         elif kind == 'current' and index == p.active and p.hold_xy is None:
             self._take_fields(now, fields, goal)
         elif self.fields is None:
-            self._take_fields(now, fields, goal)
+            self._take_fields(now, fields, goal, hold=kind == 'hold')
         # anything else is a stale answer to an outdated question: dropped
 
     def _advance(self, now):
@@ -265,8 +269,16 @@ class Executor:
             self.next_field_request = now + self.planner.period
         else:
             self._request_fields(now, force=True)
-            if self.builder_ready and self.builder.stop <= 0:
-                self.builder.rearm()
+            if self.builder_ready:
+                self._resume()
+
+    def _resume(self):
+        """Undo the training stop latch for a new goal. stop > 50: walking; 1..50: stopping (the gait phase still
+        runs, so walking on keeps it); 0: standing (restart the gait in anti-phase)."""
+        if self.builder.stop <= 0:
+            self.builder.rearm()
+        elif self.builder.stop <= 50:
+            self.builder.stop = 100
 
     def _pelvis(self, s):
         if self.pose is None:
@@ -402,7 +414,13 @@ class Executor:
         if self.fields is None:
             raise Fault('no fields')
         pos, quat, rot = pelvis
+        self.last['policy_wait'] = None
         if not self.builder_ready:
+            hold = self.planner.hold_xy
+            if hold is not None and not (self.field_hold and
+                                         np.linalg.norm(np.asarray(self.field_goal)[:2] - hold) <= self.cfg.hold_goal_tolerance_m):
+                self.last['policy_wait'] = 'fields of the hold point'
+                return self._stand(s, 1.)               # never start on another goal's fields: the policy would walk
             obs = self.builder.reset(s.q, pos, quat, self.fields, dq=s.dq, gyro=s.gyro, pelvis_rotation=rot)
             self.builder_ready = True
         else:

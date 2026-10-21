@@ -89,7 +89,7 @@ def fuse_orientation(chain_rotation, imu_rotation):
 class PelvisChain:
     """T_map_body (SLAM) + waist joints -> pelvis pose in the map."""
 
-    def __init__(self, kinematics, mount='robot_xml', lidar_to_imu_t=LIDAR_TO_IMU_T):
+    def __init__(self, kinematics, mount='unitree_urdf', lidar_to_imu_t=LIDAR_TO_IMU_T):
         spec = MOUNTS[mount] if isinstance(mount, str) else mount
         t_torso_lidar = transform(rpy_matrix(*spec['rpy']), spec['xyz'])
         t_lidar_body = transform(np.eye(3), -np.asarray(lidar_to_imu_t, float))   # IMU origin in the lidar frame

@@ -77,7 +77,7 @@ def gantry_schedule(t_go=11.0):
 
 def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0, 0.5, 0.4), seconds=40.,
         procedure='gantry', pose_hz=10., pose_latency_s=0.06, pose_noise=0.01, action_latency_s=0.010,
-        field_latency_s=2.5, field_period_s=1.0, motor_kp_scale=0.9, true_mount='robot_xml', exec_mount='robot_xml',
+        field_latency_s=2.5, field_period_s=1.0, motor_kp_scale=0.9, true_mount='unitree_urdf', exec_mount='unitree_urdf',
         events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True):
     contract = load_contract(); kin = FastKinematics(contract)
     clock = SimClock()
@@ -162,6 +162,13 @@ def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0
                     name = kin.site_names[i]; log['intrusion_sites'][name] = log['intrusion_sites'].get(name, 0) + 1
             if pos[2] < .45 and (robot.gantry is None or robot.gantry['length'] > 5):
                 log['fell'] = True
+            if ex.last.get('policy_wait'):
+                log['wait_steps'] = log.get('wait_steps', 0) + 1
+        if ex.mode == rn.POLICY and planner.hold_xy is not None:     # 'balance' / 'stop': the robot must stay put
+            log.setdefault('hold_from', pos[:2].copy())
+            log['hold_drift'] = max(log.get('hold_drift', 0.), float(np.linalg.norm(pos[:2] - log['hold_from'])))
+        else:
+            log.pop('hold_from', None)
         if renderer is not None and k % 2 == 0:
             renderer.update_scene(robot.data, cam); frames.append(renderer.render().copy())
         if planner.reached and ex.mode == rn.POLICY and np.linalg.norm(robot.data.qvel[:2]) < .05 and now > 1.:
@@ -174,6 +181,8 @@ def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0
                   goal_xy=np.round(scene_obj.goal, 3).tolist(), site_intrusion_steps=log['intrusions'],
                   intrusion_sites=log['intrusion_sites'], min_pelvis_z=round(log['min_z'], 3),
                   max_step_ms=round(log['max_step_ms'], 2), field_solves=fields.solves, bad_crc=robot.bad_crc,
+                  hold_drift_m=round(log.get('hold_drift', 0.), 3),
+                  policy_wait_s=round(log.get('wait_steps', 0) * contract['control_dt'], 2),
                   transitions=log['transitions'],
                   settings=dict(pose_hz=pose_hz, pose_latency_s=pose_latency_s, pose_noise=pose_noise, action_latency_s=action_latency_s,
                                 field_latency_s=field_latency_s, motor_kp_scale=motor_kp_scale, true_mount=true_mount,
@@ -193,7 +202,7 @@ def main():
     p.add_argument('--pose-hz', type=float, default=10.); p.add_argument('--pose-latency', type=float, default=0.06)
     p.add_argument('--pose-noise', type=float, default=0.01); p.add_argument('--action-latency', type=float, default=0.010)
     p.add_argument('--field-latency', type=float, default=2.5); p.add_argument('--motor-kp-scale', type=float, default=0.9)
-    p.add_argument('--true-mount', default='robot_xml'); p.add_argument('--exec-mount', default='robot_xml')
+    p.add_argument('--true-mount', default='unitree_urdf'); p.add_argument('--exec-mount', default='unitree_urdf')
     p.add_argument('--physical', action='store_true'); p.add_argument('--video'); p.add_argument('--assets'); p.add_argument('--out')
     a = p.parse_args()
     t = time.time()

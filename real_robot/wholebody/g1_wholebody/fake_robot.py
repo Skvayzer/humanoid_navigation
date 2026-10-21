@@ -21,7 +21,7 @@ from .lowlevel import LowCmd, LowState, NUM_BODY, crc_of_packed, remote_bytes
 
 class FakeG1:
     def __init__(self, contract, kinematics, scene=None, physical=False, start=(0., 0., 0.), assets=None,
-                 mount='robot_xml', motor_kp_scale=1.0, imu_yaw_offset=0.7, gantry=None, seed=0):
+                 mount='unitree_urdf', motor_kp_scale=1.0, imu_yaw_offset=0.7, gantry=None, seed=0):
         import mujoco
         self.mj = mujoco
         self.c = contract

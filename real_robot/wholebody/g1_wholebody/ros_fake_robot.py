@@ -25,7 +25,7 @@ from .lowlevel import LowCmd, NUM_MOTORS
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--scene', default='sidegap_corridor_048'); p.add_argument('--anchor', nargs=3, type=float, default=(1.0, 0.5, 0.4))
-    p.add_argument('--gantry', action='store_true'); p.add_argument('--mount', default='robot_xml')
+    p.add_argument('--gantry', action='store_true'); p.add_argument('--mount', default='unitree_urdf')
     p.add_argument('--pose-hz', type=float, default=10.); p.add_argument('--pose-latency', type=float, default=0.06)
     p.add_argument('--pose-noise', type=float, default=0.01); p.add_argument('--action-latency', type=float, default=0.010)
     p.add_argument('--lowstate-hz', type=float, default=250.)

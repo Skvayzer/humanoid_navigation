@@ -40,7 +40,7 @@ def parse(argv=None):
                    help='REAL free floor in the map; POLICY is refused without it')
     p.add_argument('--geofence-from-scene', type=float, metavar='MARGIN',
                    help='geofence = scene bounding box + MARGIN (only if that floor is really free)')
-    p.add_argument('--mount', default='robot_xml', choices=('robot_xml', 'unitree_urdf'))
+    p.add_argument('--mount', default='unitree_urdf', choices=('unitree_urdf', 'robot_xml'))
     p.add_argument('--active', action='store_true', help='allow motor commands (gantry procedure; see README)')
     p.add_argument('--start', choices=('idle', 'shadow'), default='idle')
     p.add_argument('--kp-scale', type=float, default=1.0)
@@ -55,7 +55,8 @@ class Recorder:
     The control loop only copies a few small arrays per step (no list of dicts, no compression in the loop)."""
 
     FIELDS = dict(t=(), step_s=(), latency_s=(), mode=(), q=(29,), dq=(29,), gyro=(3,), quat=(4,), action=(29,),
-                  targets=(29,), command=(4,), pelvis_xy=(2,))
+                  targets=(29,), command=(4,), pelvis_xy=(2,),
+                  slam=(7,), slam_stamp=())                  # latest T_map_body: x y z qw qx qy qz (mount check offline)
     MODES = ('IDLE', 'SHADOW', 'STAND_UP', 'STAND', 'POLICY', 'DAMP')
 
     def __init__(self, directory, block=500):
@@ -294,6 +295,7 @@ def main(argv=None):
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set()); signal.signal(signal.SIGTERM, lambda *_: stop.set())
     zeros29, zeros4, zeros2 = np.zeros(29), np.zeros(4), np.zeros(2)
+    slam_log, slam_stamp = np.full(7, np.nan), 0.
 
     dt = contract['control_dt']; t0 = time.monotonic(); k = 0; n = 0; overruns = 0; last_mode = ex.mode
     try:
@@ -311,6 +313,7 @@ def main(argv=None):
                     log.error('LowState decode: %s' % exc)
             if pose is not None:
                 ex.on_slam_pose(pose[0], pose[1], received=pose[2], age_s=pose[3])
+                slam_log = np.r_[pose[0][:3, 3], matrix_quat(pose[0][:3, :3])]; slam_stamp = pose[1]
             for c in cmds:
                 ok = ex.command(c); log.info('operator %s -> %s (%s)' % (c, 'ok' if ok else 'refused', ex.reason))
             cmd = ex.step(now)
@@ -328,7 +331,8 @@ def main(argv=None):
                 recorder.add(t=now, step_s=L.get('step_s', 0.), latency_s=L.get('latency_s') or 0.,
                              mode=Recorder.MODES.index(ex.mode), q=ex.state.q, dq=ex.state.dq, gyro=ex.state.gyro,
                              quat=ex.state.quat_wxyz, action=L.get('action', zeros29), targets=L.get('targets', zeros29),
-                             command=L.get('command', zeros4), pelvis_xy=L.get('pelvis_xy', zeros2))
+                             command=L.get('command', zeros4), pelvis_xy=L.get('pelvis_xy', zeros2),
+                             slam=slam_log, slam_stamp=slam_stamp)
             if n % 10 == 0:
                 status = dict(mode=ex.mode, reason=ex.reason, step_ms=round(1e3 * L.get('step_s', 0.), 2),
                               latency_ms=round(1e3 * (L.get('latency_s') or 0.), 1), overruns=overruns,
@@ -336,7 +340,7 @@ def main(argv=None):
                               waypoint=ex.planner.active, reached=ex.planner.reached, hold=ex.planner.hold_xy is not None,
                               fields_age_s=None if ex.fields_time is None else round(now - ex.fields_time, 1),
                               field_solve_s=None if worker.last_compute_s is None else round(worker.last_compute_s, 2),
-                              field_error=worker.last_error, active_allowed=args.active)
+                              field_error=worker.last_error, policy_wait=L.get('policy_wait'), active_allowed=args.active)
                 bridge.status.publish(bridge.String(data=json.dumps(status)))
                 if ex.state is not None and ex.pose is not None:
                     pos, quat, _ = ex._pelvis(ex.state)

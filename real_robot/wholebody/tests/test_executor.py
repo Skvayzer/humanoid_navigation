@@ -20,15 +20,15 @@ class InstantFields:
     cache = {}
 
     def __init__(self, scene):
-        self.scene, self.out, self.requests = scene, None, 0
+        self.scene, self.out, self.requests, self.busy = scene, None, 0, False
         key = scene.name
         if key not in self.cache:
             self.cache[key] = solve_fields(scene.start, scene.waypoints()[0], scene.occupancy)
 
     def request(self, xy, goal):
-        if self.out is not None:
+        if self.out is not None or self.busy:
             return False
-        self.out = self.cache[self.scene.name]; self.requests += 1; return True
+        self.out = (self.cache[self.scene.name][0], np.asarray(goal, float)); self.requests += 1; return True
 
     def poll(self):
         out, self.out = self.out, None
@@ -116,6 +116,28 @@ class ExecutorTest(unittest.TestCase):
         np.testing.assert_allclose(cmd.kp[:29], self.c['kp']); np.testing.assert_allclose(cmd.kd[:29], self.c['kd'])
         self.assertTrue(np.all(cmd.tau[:12] == 0) and np.any(cmd.tau[12:29] != 0))
         self.assertTrue((cmd.mode[:29] == 1).all())
+
+    def test_balance_waits_for_fields_of_the_hold_point(self):
+        ex = self.make(); self.run_steps(ex, 2)
+        self.assertTrue(ex.command('stand'), ex.reason); self.run_steps(ex, int(3.1 / 0.02))
+        # the worker is still solving an older question; the fields at hand lead to a waypoint 1.6 m away
+        ex.field_goal, ex.field_hold = np.asarray(self.scene.waypoints()[1], float), False; self.fields.busy = True
+        self.assertTrue(ex.command('balance'), ex.reason); self.calls.clear()
+        cmd = self.run_steps(ex, 5)[-1]
+        self.assertEqual(ex.mode, rn.POLICY); self.assertEqual(self.calls, [])
+        self.assertEqual(ex.last['policy_wait'], 'fields of the hold point')
+        np.testing.assert_allclose(cmd.q[:29], self.c['nominal'], atol=1e-6)        # holds the stand pose
+        self.fields.busy = False; ex.next_field_request = 0.; self.run_steps(ex, 3)
+        self.assertTrue(self.calls); self.assertIsNone(ex.last['policy_wait'])
+
+    def test_new_goal_while_stopping_walks_on(self):
+        ex = self.make(); self.to_policy(ex)
+        ex.builder.stop = 30; phase = ex.builder.phase.copy()      # stopping on the old goal's fields
+        ex._take_fields(self.clock.t, ex.fields, np.asarray(ex.field_goal) + 1.)
+        self.assertEqual(ex.builder.stop, 100); np.testing.assert_array_equal(ex.builder.phase, phase)
+        ex.builder.stop = 0                                         # stopped for good: restarted
+        ex._take_fields(self.clock.t, ex.fields, np.asarray(ex.field_goal) + 1.)
+        self.assertEqual(ex.builder.stop, 100)
 
     def assert_damped(self, cmd, reason_part, ex):
         self.assertEqual(ex.mode, rn.DAMP); self.assertIn(reason_part, ex.reason)

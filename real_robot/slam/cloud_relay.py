@@ -9,6 +9,7 @@
   cloud_relay.py [--no-map]          (started by run_slam.sh in every mode)
 """
 import collections
+import signal
 import sys
 import time
 
@@ -54,7 +55,11 @@ def main():
     obst_pub = node.create_publisher(PointCloud2, '/g1_slam/obstacles', 1)
     log.info('relaying /g1_slam/obstacles%s' % (' and /g1_slam/map' if publish_map else ''))
     last_map = last_obst = 0.
-    while rclpy.ok():
+    # started with '&' by run_slam.sh (non-interactive bash): SIGINT arrives ignored, so set the handlers ourselves,
+    # or 'g1.sh slam stop' waits the full docker stop timeout
+    stop = []
+    signal.signal(signal.SIGINT, lambda *_: stop.append(1)); signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+    while rclpy.ok() and not stop:
         rclpy.spin_once(node, timeout_sec=0.05)
         now = time.monotonic()
         while recent and now - recent[0][0] > OBST_WINDOW_S:

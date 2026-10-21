@@ -16,6 +16,7 @@ RUN if [ "$(uname -m)" = aarch64 ]; then \
       cp /tmp/unitree_cyclone/librmw_cyclonedds_cpp.so /opt/ros/foxy/lib/librmw_cyclonedds_cpp.so && \
       ln -sf libddsc.so /usr/local/lib/libddsc.so.0 && ldconfig; fi; rm -rf /tmp/unitree_cyclone
 COPY --from=builder /ws/install /opt/demo/messages
-ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=0 HOME=/tmp/demo_home ROS_LOG_DIR=/tmp/ros_logs
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=0 HOME=/tmp/demo_home ROS_LOG_DIR=/tmp/ros_logs PYTHONUNBUFFERED=1 \
+    LD_LIBRARY_PATH=/usr/local/lib:/opt/ros/foxy/lib/aarch64-linux-gnu:/opt/ros/foxy/lib  # the vendor CycloneDDS 0.10 first (robot config)
 LABEL com.g1-real-robot.role=demo
 ENTRYPOINT ["bash", "-c", "source /opt/ros/foxy/setup.bash && source /opt/demo/messages/setup.bash && exec python3 /opt/demo/ar_demo.py \"$@\"", "--"]

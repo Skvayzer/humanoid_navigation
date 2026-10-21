@@ -87,8 +87,12 @@ class FieldsTest(unittest.TestCase):
                 self.fail('worker timed out: %s' % worker.last_error)
             self.assertTrue(worker.request(scene.start, scene.waypoints()[0]))     # virtual: empty floor
             worker.set_world(mode='real')                                           # the answer above is now stale
-            import time; time.sleep(1.5)
-            self.assertIsNone(worker.poll())
+            import time
+            for _ in range(1200):                                                   # no fixed sleep: QEMU is ~10x slower
+                self.assertIsNone(worker.poll())                                    # ... and it is dropped, never returned
+                if worker.pending is None:
+                    break
+                time.sleep(0.05)
             self.assertTrue(worker.request(scene.start, scene.waypoints()[0]))
             real, _ = wait()
             near = real.sample(np.array([[0.9, 0.6, 0.6]]))[2][0]

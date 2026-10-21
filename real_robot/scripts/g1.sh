@@ -10,6 +10,8 @@
 #   g1.sh wb active <executor args>           policy may drive the motors (gantry checklist!)
 #   g1.sh wb stop                             stop the executor (it damps for 0.5 s first if active)
 #   g1.sh op <stand|balance|go|stop|damp|reset|shadow|idle>   operator command to the executor
+#   g1.sh up --geofence XMIN XMAX YMIN YMAX [executor args]   whole stack once, then drive it from the remote
+#   g1.sh down                                stop all of it
 #   g1.sh record-motors [start|stop]          full-rate /lowstate + /lowcmd log (read-only)
 #   g1.sh status | logs [slam|wb]
 # executor args: --scene NAME (--anchor X Y YAW | --anchor-at-robot) [--geofence XMIN XMAX YMIN YMAX]
@@ -110,6 +112,24 @@ case "${1:-status}" in
       --memory 3g --shm-size 256m --mount "type=bind,src=$runtime/wholebody/logs,dst=/data/logs" \
       "$wb_image" run "$@" "${extra[@]}" --log-dir /data/logs >/dev/null
     sleep 3; sudo docker logs "$wb_name" 2>&1 | tail -5 ;;
+  up)               # the whole stack once (SLAM odom, executor active in IDLE, Foxglove bridge, motor log); then the remote drives it
+    shift
+    printf '%s\n' "$@" | grep -q -- '--geofence' || { echo "up needs --geofence XMIN XMAX YMIN YMAX (real free floor round the start mark)" >&2; exit 2; }
+    printf '%s\n' "$@" | grep -q -- '--scene' || set -- --scene flat_walk_4m --anchor-at-robot "$@"
+    running "$slam_name" || "$0" slam odom
+    "$0" wb active "$@"
+    "$repo/real_robot/cat_bridge/scripts/perception.sh" viz-start
+    "$0" record-motors start || true
+    cat <<'EOF'
+Remote (hold 0.5 s; L2+B acts at once):
+  L2+B  DAMP, from any state        L1+Y  reset: DAMP -> IDLE
+  L1+A  stand: IDLE -> STAND (3 s)  L1+X  balance: STAND -> policy, goal = here (keep the rope until it stands still)
+  R1+A  go: walk the scene          R1+B  stop: goal = here
+Finish: g1.sh down
+EOF
+    ;;
+  down)
+    "$0" wb stop; "$0" record-motors stop; "$0" slam stop; "$repo/real_robot/cat_bridge/scripts/perception.sh" viz-stop ;;
   record-motors)    # full-rate /lowstate + /lowcmd log, read-only (never publishes) -> runtime/wholebody/motor_logs
     mr_name=g1-rr-motorlog; mr_dir="$runtime/wholebody/motor_logs"
     if [[ "${2:-start}" == stop ]]; then

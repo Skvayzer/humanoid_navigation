@@ -214,5 +214,18 @@ class ExecutorTest(unittest.TestCase):
         self.assertIn(ex.mode, (rn.STAND_UP, rn.STAND))
 
 
+    def test_remote_drives_the_whole_cycle(self):
+        # DAMP -> IDLE -> STAND -> POLICY (hold) -> POLICY (walking), each combo held 0.6 s, no operator topic
+        ex = self.make(); self.run_steps(ex, 2)
+        self.run_steps(ex, 2, buttons=('L2', 'B')); self.assertEqual(ex.mode, rn.DAMP)
+        self.run_steps(ex, 2); self.run_steps(ex, 30, buttons=('L1', 'Y')); self.assertEqual(ex.mode, rn.IDLE)
+        self.run_steps(ex, 2); self.run_steps(ex, 30, buttons=('L1', 'A')); self.run_steps(ex, 160)
+        self.assertEqual(ex.mode, rn.STAND)
+        self.run_steps(ex, 30, buttons=('L1', 'X')); self.assertEqual(ex.mode, rn.POLICY)
+        self.assertIsNotNone(ex.planner.hold_xy)
+        self.run_steps(ex, 5); self.run_steps(ex, 30, buttons=('R1', 'A'))
+        self.assertEqual(ex.mode, rn.POLICY); self.assertIsNone(ex.planner.hold_xy)
+
+
 if __name__ == '__main__':
     unittest.main()

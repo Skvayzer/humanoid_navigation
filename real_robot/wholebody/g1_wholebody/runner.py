@@ -64,6 +64,8 @@ class Config:
     remote_stand: frozenset = frozenset({'L1', 'A'})
     remote_go: frozenset = frozenset({'R1', 'A'})
     remote_stop: frozenset = frozenset({'R1', 'B'})
+    remote_reset: frozenset = frozenset({'L1', 'Y'})   # DAMP -> IDLE
+    remote_balance: frozenset = frozenset({'L1', 'X'}) # STAND -> POLICY, goal = here
     remote_hold_s: float = 0.5
     prefetch_radius_m: float = 2.0          # request the next waypoint's fields this far before the switch
     hold_goal_tolerance_m: float = 0.5      # 'balance' starts the policy only on hold fields solved this close to here
@@ -334,7 +336,8 @@ class Executor:
         pressed = remote_buttons(s.remote)
         if self.cfg.remote_estop <= pressed:
             return 'damp'
-        for name, combo in (('stand', self.cfg.remote_stand), ('go', self.cfg.remote_go), ('stop', self.cfg.remote_stop)):
+        for name, combo in (('reset', self.cfg.remote_reset), ('stand', self.cfg.remote_stand), ('balance', self.cfg.remote_balance),
+                            ('go', self.cfg.remote_go), ('stop', self.cfg.remote_stop)):
             if combo <= pressed:
                 first = self.held.setdefault(name, now)
                 if now - first >= self.cfg.remote_hold_s:

@@ -72,7 +72,14 @@ drivers keep executing the last command they received.
 | run time (POLICY) | > 180 s |
 
 Remote (Unitree controller, read from `LowState.wireless_remote`): **L2+B = DAMP at any time** ·
-L1+A held 0.5 s = stand · R1+A held 0.5 s = go · R1+B held 0.5 s = stop (stand in place).
+L1+Y = reset (DAMP → IDLE) · L1+A = stand · L1+X = balance (policy, goal = here) · R1+A = go · R1+B = stop
+(stand in place); all but L2+B must be held 0.5 s. The whole session from the remote:
+
+```bash
+real_robot/scripts/g1.sh up --geofence -1 1 -1 1    # SLAM odom + executor (active, IDLE) + Foxglove bridge + motor log
+# remote: L1+A stand -> lower the crane -> L1+X balance -> rope slack -> R1+A go ... L2+B damp -> L1+Y reset -> L1+A ...
+real_robot/scripts/g1.sh down
+```
 Without `--active` the `/lowcmd` publisher is never created. `g1.sh wb active` asks to type `ACTIVE` and
 requires `--geofence`. Stopping the node while active sends 0.5 s of damping first.
 

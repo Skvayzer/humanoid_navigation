@@ -27,7 +27,7 @@
     "far": 500
    },
    "followMode": "follow-position",
-   "followTf": "g1_wb_pelvis",
+   "followTf": "body",
    "scene": {
     "enableStats": false
    },
@@ -40,6 +40,34 @@
     }
    },
    "topics": {
+    "/g1_slam/map": {
+     "visible": true,
+     "pointSize": 2,
+     "pointShape": "square",
+     "decayTime": 0,
+     "colorField": "z",
+     "colorMode": "colormap",
+     "colorMap": "rainbow",
+     "explicitAlpha": 0.6
+    },
+    "/g1_cat/occupancy_cat": {
+     "visible": true,
+     "pointSize": 4,
+     "pointShape": "square",
+     "decayTime": 2.5,
+     "colorMode": "flat",
+     "flatColor": "#ff3df5ff"
+    },
+    "/g1_cat/sdf_slice": {
+     "visible": false,
+     "pointSize": 6,
+     "colorField": "intensity",
+     "colorMode": "colormap",
+     "colorMap": "turbo",
+     "decayTime": 2.5,
+     "minValue": -0.1,
+     "maxValue": 1.2
+    },
     "/g1_wb/virtual_scene": {
      "visible": true
     },
@@ -98,9 +126,11 @@
     "/g1_slam/path": {
      "visible": false
     },
-    "/g1_cat/occupancy_cat": {
-     "visible": false,
-     "pointSize": 3
+    "/g1_cat/boundary_preview": {
+     "visible": false
+    },
+    "/g1_cat/roi": {
+     "visible": false
     }
    },
    "layers": {

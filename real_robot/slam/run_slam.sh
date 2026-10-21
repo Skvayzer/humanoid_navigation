@@ -38,6 +38,7 @@ pids+=($!)
 
 case "$mode" in
   odom|mapping)
+    : > /data/logs/floor_anchor.log      # truncate here: the background redirect below may run after the first grep
     python3 "$tools/floor_anchor.py" "/data/logs/floor_anchor_$(date -u +%Y%m%dT%H%M%SZ).json" > /data/logs/floor_anchor.log 2>&1 &
     pids+=($!)
     for _ in $(seq 1 60); do grep -q 'map -> camera_init fixed' /data/logs/floor_anchor.log 2>/dev/null && break; sleep 1; done

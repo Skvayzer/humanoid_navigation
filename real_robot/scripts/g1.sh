@@ -12,6 +12,7 @@
 #   g1.sh op <stand|balance|go|stop|damp|reset|shadow|idle>   operator command to the executor
 #   g1.sh up --geofence XMIN XMAX YMIN YMAX [executor args]   whole stack once, then drive it from the remote
 #   g1.sh down                                stop all of it
+#   g1.sh viz [start|stop]                    Foxglove bridge whose buttons may write /g1_wb/{operator,scene,obstacle_mode,goal_pose}
 #   g1.sh record-motors [start|stop]          full-rate /lowstate + /lowcmd log (read-only)
 #   g1.sh status | logs [slam|wb]
 # executor args: --scene NAME (--anchor X Y YAW | --anchor-at-robot) [--geofence XMIN XMAX YMIN YMAX]
@@ -113,13 +114,29 @@ case "${1:-status}" in
       --mount "type=bind,src=$runtime/wholebody/scenes,dst=/data/scenes,readonly=true" -e G1_SCENES_DIR=/data/scenes \
       "$wb_image" run "$@" "${extra[@]}" --log-dir /data/logs >/dev/null
     sleep 3; sudo docker logs "$wb_name" 2>&1 | tail -5 ;;
+  viz)              # Foxglove bridge for this stack: the CAT viewer image, writable only for /g1_wb/{operator,scene,obstacle_mode,goal_pose}
+    vz=g1-rr-rosbridge
+    if [[ "${2:-start}" == stop ]]; then
+      exists "$vz" && { sudo docker stop --time 3 "$vz" >/dev/null; sudo docker rm "$vz" >/dev/null; }; echo "viewer bridge stopped"; exit 0
+    fi
+    if exists g1-cat-rosbridge; then sudo docker stop --time 3 g1-cat-rosbridge >/dev/null; sudo docker rm g1-cat-rosbridge >/dev/null; fi   # same port
+    exists "$vz" && ! running "$vz" && sudo docker rm "$vz" >/dev/null
+    if ! exists "$vz"; then
+      sudo docker run --detach --name "$vz" --network host --restart no --user "$(id -u):$(id -g)" --read-only --cap-drop ALL \
+        --security-opt no-new-privileges:true --pids-limit 128 --cpus 1 --memory 768m --log-opt max-size=10m --log-opt max-file=2 \
+        --tmpfs /tmp:rw,nosuid,nodev,size=64m --mount "type=bind,src=$dds,dst=/opt/cyclonedds.xml,readonly=true" \
+        --mount "type=bind,src=$repo/real_robot/foxglove/rosbridge_protocol_wb.py,dst=/opt/rosbridge_overlay/python/rosbridge_library/rosbridge_protocol.py,readonly=true" \
+        -e CYCLONEDDS_URI=/opt/cyclonedds.xml -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" -e ROSBRIDGE_ADDRESS=127.0.0.1 g1-cat-rosbridge:latest >/dev/null
+    fi
+    for _ in $(seq 1 20); do ss -lnt | grep -q "127.0.0.1:9090 " && { echo "viewer bridge on 127.0.0.1:9090 (writable: /g1_wb/operator, scene, obstacle_mode, goal_pose)"; exit 0; }; sleep 1; done
+    echo "viewer bridge did not start" >&2; sudo docker logs --tail 20 "$vz" >&2; exit 5 ;;
   up)               # the whole stack once (SLAM odom, executor active in IDLE, Foxglove bridge, motor log); then the remote drives it
     shift
     printf '%s\n' "$@" | grep -q -- '--geofence' || { echo "up needs --geofence XMIN XMAX YMIN YMAX (real free floor round the start mark)" >&2; exit 2; }
     printf '%s\n' "$@" | grep -q -- '--scene' || set -- --scene flat_walk_4m --anchor-at-robot "$@"
     running "$slam_name" || "$0" slam odom
     "$0" wb active "$@"
-    "$repo/real_robot/cat_bridge/scripts/perception.sh" viz-start
+    "$0" viz
     "$0" record-motors start || true
     cat <<'EOF'
 Remote (hold 0.5 s; L2+B acts at once):
@@ -130,7 +147,7 @@ Finish: g1.sh down
 EOF
     ;;
   down)
-    "$0" wb stop; "$0" record-motors stop; "$0" slam stop; "$repo/real_robot/cat_bridge/scripts/perception.sh" viz-stop ;;
+    "$0" wb stop; "$0" record-motors stop; "$0" slam stop; "$0" viz stop ;;
   record-motors)    # full-rate /lowstate + /lowcmd log, read-only (never publishes) -> runtime/wholebody/motor_logs
     mr_name=g1-rr-motorlog; mr_dir="$runtime/wholebody/motor_logs"
     if [[ "${2:-start}" == stop ]]; then

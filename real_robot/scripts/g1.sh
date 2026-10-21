@@ -10,6 +10,7 @@
 #   g1.sh wb active <executor args>           policy may drive the motors (gantry checklist!)
 #   g1.sh wb stop                             stop the executor (it damps for 0.5 s first if active)
 #   g1.sh op <stand|balance|go|stop|damp|reset|shadow|idle>   operator command to the executor
+#   g1.sh record-motors [start|stop]          full-rate /lowstate + /lowcmd log (read-only)
 #   g1.sh status | logs [slam|wb]
 # executor args: --scene NAME (--anchor X Y YAW | --anchor-at-robot) [--geofence XMIN XMAX YMIN YMAX]
 #                [--policy u596|robust_delay_v1_u150] [--mount unitree_urdf|robot_xml]
@@ -109,6 +110,21 @@ case "${1:-status}" in
       --memory 3g --shm-size 256m --mount "type=bind,src=$runtime/wholebody/logs,dst=/data/logs" \
       "$wb_image" run "$@" "${extra[@]}" --log-dir /data/logs >/dev/null
     sleep 3; sudo docker logs "$wb_name" 2>&1 | tail -5 ;;
+  record-motors)    # full-rate /lowstate + /lowcmd log, read-only (never publishes) -> runtime/wholebody/motor_logs
+    mr_name=g1-rr-motorlog; mr_dir="$runtime/wholebody/motor_logs"
+    if [[ "${2:-start}" == stop ]]; then
+      exists "$mr_name" || { echo "motor log not running"; exit 0; }
+      sudo docker stop "$mr_name" >/dev/null; sudo docker logs "$mr_name" 2>&1 | tail -2; sudo docker rm "$mr_name" >/dev/null
+      echo "motor log stopped: $mr_dir"; exit 0
+    fi
+    clear_stopped "$mr_name" wholebody wholebody
+    exists "$mr_name" && { echo "motor log already running" >&2; exit 3; }
+    mkdir -p "$mr_dir"
+    sudo docker run --detach --name "$mr_name" "${common[@]}" --cpus 1 --memory 1g \
+      --mount "type=bind,src=$repo/real_robot/wholebody/tools,dst=/opt/tools,readonly=true" \
+      --mount "type=bind,src=$mr_dir,dst=/data/motor_logs" --entrypoint bash "$wb_image" \
+      -c "source /opt/ros/foxy/setup.bash && source /opt/wb/messages/setup.bash && exec python3 /opt/tools/motor_recorder.py /data/motor_logs" >/dev/null
+    sleep 3; sudo docker logs "$mr_name" 2>&1 | tail -2 ;;
   op)
     cmd="${2:?operator command}"
     [[ "$cmd" =~ ^(stand|balance|go|stop|damp|reset|shadow|idle)$ ]] || { echo "unknown command $cmd" >&2; exit 2; }

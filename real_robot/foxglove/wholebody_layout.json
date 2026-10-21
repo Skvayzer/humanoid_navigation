@@ -1,25 +1,322 @@
 {
-  "configById": {
-    "3D!wb": {
-      "cameraState": {"distance": 8, "perspective": true, "phi": 55, "thetaOffset": 30, "targetOffset": [0, 0, 0], "target": [0, 0, 0], "targetOrientation": [0, 0, 0, 1], "fovy": 45, "near": 0.01, "far": 500},
-      "followMode": "follow-pose",
-      "followTf": "map",
-      "scene": {"enableStats": false},
-      "transforms": {},
-      "topics": {
-        "/g1_wb/virtual_scene": {"visible": true},
-        "/g1_wb/sdf_slice": {"visible": true, "pointSize": 5, "colorField": "intensity", "colorMode": "colormap", "colorMap": "turbo", "decayTime": 2.0},
-        "/g1_wb/pelvis": {"visible": true, "type": "arrow"},
-        "/g1_wb/goal": {"visible": true, "type": "arrow"},
-        "/g1_slam/cloud_registered": {"visible": false, "pointSize": 2},
-        "/g1_slam/path": {"visible": true},
-        "/g1_cat/occupancy_cat": {"visible": false, "pointSize": 3}
-      },
-      "layers": {"grid": {"layerId": "foxglove.Grid", "visible": true, "frameId": "map", "size": 12, "divisions": 12}}
+ "configById": {
+  "3D!wb": {
+   "cameraState": {
+    "distance": 7,
+    "perspective": true,
+    "phi": 50,
+    "thetaOffset": -60,
+    "targetOffset": [
+     0,
+     0,
+     0
+    ],
+    "target": [
+     0,
+     0,
+     0
+    ],
+    "targetOrientation": [
+     0,
+     0,
+     0,
+     1
+    ],
+    "fovy": 45,
+    "near": 0.01,
+    "far": 500
+   },
+   "followMode": "follow-position",
+   "followTf": "g1_wb_pelvis",
+   "scene": {
+    "enableStats": false
+   },
+   "transforms": {
+    "frame:camera_init": {
+     "visible": false
     },
-    "RawMessages!status": {"topicPath": "/g1_wb/status", "diffEnabled": false, "expansion": "all"}
+    "frame:body": {
+     "visible": false
+    }
+   },
+   "topics": {
+    "/g1_wb/virtual_scene": {
+     "visible": true
+    },
+    "/g1_wb/sdf_slice": {
+     "visible": true,
+     "pointSize": 4,
+     "pointShape": "square",
+     "decayTime": 0,
+     "colorField": "intensity",
+     "colorMode": "colormap",
+     "colorMap": "turbo",
+     "minValue": -0.1,
+     "maxValue": 1.2
+    },
+    "/g1_wb/sites": {
+     "visible": true,
+     "pointSize": 14,
+     "pointShape": "circle",
+     "decayTime": 0,
+     "colorField": "sdf",
+     "colorMode": "gradient",
+     "gradient": [
+      "#ff2020ff",
+      "#20e050ff"
+     ],
+     "minValue": 0.0,
+     "maxValue": 0.3
+    },
+    "/g1_wb/pelvis": {
+     "visible": true,
+     "type": "arrow",
+     "arrowScale": [
+      0.45,
+      0.08,
+      0.08
+     ],
+     "color": "#2f9bffff"
+    },
+    "/g1_wb/goal": {
+     "visible": true,
+     "type": "arrow",
+     "arrowScale": [
+      0.3,
+      0.12,
+      0.12
+     ],
+     "color": "#20e050ff"
+    },
+    "/g1_slam/cloud_registered": {
+     "visible": false,
+     "pointSize": 2,
+     "decayTime": 0,
+     "colorMode": "flat",
+     "flatColor": "#c8c8c880"
+    },
+    "/g1_slam/path": {
+     "visible": false
+    },
+    "/g1_cat/occupancy_cat": {
+     "visible": false,
+     "pointSize": 3
+    }
+   },
+   "layers": {
+    "grid": {
+     "layerId": "foxglove.Grid",
+     "visible": true,
+     "frameId": "map",
+     "size": 12,
+     "divisions": 12
+    }
+   }
   },
-  "globalVariables": {},
-  "userNodes": {},
-  "layout": {"first": "3D!wb", "second": "RawMessages!status", "direction": "row", "splitPercentage": 72}
+  "Indicator!mode": {
+   "path": "/studio_script/wb_status.mode",
+   "style": "background",
+   "fallbackColor": "#555555",
+   "fallbackLabel": "no status",
+   "rules": [
+    {
+     "operator": "=",
+     "rawValue": "DAMP",
+     "color": "#e02020",
+     "label": "DAMP"
+    },
+    {
+     "operator": "=",
+     "rawValue": "POLICY",
+     "color": "#1f9d3a",
+     "label": "POLICY"
+    },
+    {
+     "operator": "=",
+     "rawValue": "STAND",
+     "color": "#d08000",
+     "label": "STAND"
+    },
+    {
+     "operator": "=",
+     "rawValue": "STAND_UP",
+     "color": "#d08000",
+     "label": "STAND_UP"
+    },
+    {
+     "operator": "=",
+     "rawValue": "SHADOW",
+     "color": "#2f6fdf",
+     "label": "SHADOW"
+    },
+    {
+     "operator": "=",
+     "rawValue": "IDLE",
+     "color": "#707070",
+     "label": "IDLE"
+    }
+   ]
+  },
+  "Indicator!rope": {
+   "path": "/studio_script/wb_status.rope",
+   "style": "background",
+   "fallbackColor": "#555555",
+   "fallbackLabel": "-",
+   "rules": [
+    {
+     "operator": "=",
+     "rawValue": "KEEP ROPE: stiff stand",
+     "color": "#d08000",
+     "label": "KEEP ROPE: stiff stand"
+    },
+    {
+     "operator": "=",
+     "rawValue": "KEEP ROPE: policy waiting",
+     "color": "#e05000",
+     "label": "KEEP ROPE: policy waiting"
+    },
+    {
+     "operator": "=",
+     "rawValue": "KEEP ROPE: settling",
+     "color": "#e05000",
+     "label": "KEEP ROPE: settling"
+    },
+    {
+     "operator": "=",
+     "rawValue": "standing: rope may slacken",
+     "color": "#1f9d3a",
+     "label": "standing: rope may slacken"
+    },
+    {
+     "operator": "=",
+     "rawValue": "walking",
+     "color": "#1f9d3a",
+     "label": "walking"
+    },
+    {
+     "operator": "=",
+     "rawValue": "DAMP",
+     "color": "#e02020",
+     "label": "DAMP"
+    },
+    {
+     "operator": "=",
+     "rawValue": "motors off",
+     "color": "#707070",
+     "label": "motors off"
+    }
+   ]
+  },
+  "Plot!timing": {
+   "paths": [
+    {
+     "value": "/studio_script/wb_status.step_ms",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "step ms (budget 18)"
+    },
+    {
+     "value": "/studio_script/wb_status.latency_ms",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "LowState -> command ms"
+    }
+   ],
+   "minYValue": 0,
+   "maxYValue": 25,
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showPlotValuesInLegend": true,
+   "isSynced": true,
+   "xAxisVal": "timestamp",
+   "followingViewWidth": 60
+  },
+  "Plot!fields": {
+   "paths": [
+    {
+     "value": "/studio_script/wb_status.fields_age_s",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "fields age s"
+    },
+    {
+     "value": "/studio_script/wb_status.field_solve_s",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "solve s"
+    },
+    {
+     "value": "/studio_script/wb_status.goal_dist_m",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "pelvis to field goal m"
+    }
+   ],
+   "minYValue": 0,
+   "maxYValue": 8,
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showPlotValuesInLegend": true,
+   "isSynced": true,
+   "xAxisVal": "timestamp",
+   "followingViewWidth": 60
+  },
+  "RawMessages!status": {
+   "topicPath": "/studio_script/wb_status",
+   "diffEnabled": false,
+   "expansion": "all"
+  },
+  "RosOut!log": {
+   "searchTerms": [
+    "g1_wb"
+   ],
+   "minLogLevel": 2,
+   "topicToRender": "/rosout"
+  }
+ },
+ "globalVariables": {},
+ "userNodes": {
+  "wb-status": {
+   "name": "wb_status",
+   "sourceCode": "// Splits the executor's JSON status (/g1_wb/status, 5 Hz) into fields for the Indicator and Plot panels.\nimport { Input } from \"./types\";\n\nexport const inputs = [\"/g1_wb/status\"];\nexport const output = \"/studio_script/wb_status\";\n\ntype Output = {\n  mode: string;\n  rope: string;\n  reason: string;\n  policy_wait: string;\n  step_ms: number;\n  latency_ms: number;\n  overruns: number;\n  fields_age_s: number;\n  field_solve_s: number;\n  field_error: string;\n  waypoint: number;\n  latch: number;\n  reached: boolean;\n  hold: boolean;\n  field_hold: boolean;\n  goal_dist_m: number;\n  active_allowed: boolean;\n};\n\nconst num = (v: unknown): number => (typeof v === \"number\" ? v : NaN);\n\nexport default function script(event: Input<\"/g1_wb/status\">): Output | undefined {\n  let s: Record<string, unknown>;\n  try {\n    s = JSON.parse(event.message.data);\n  } catch {\n    return undefined;\n  }\n  const mode = String(s.mode ?? \"?\");\n  const xy = s.pelvis_xy as number[] | null;\n  const goal = s.field_goal as number[] | null;\n  const goalDist = xy && goal ? Math.hypot(xy[0] - goal[0], xy[1] - goal[1]) : NaN;\n  const wait = s.policy_wait == null ? \"\" : String(s.policy_wait);\n  // the gantry procedure: slacken the rope only once the policy itself is balancing\n  let rope = \"motors off\";\n  if (mode === \"STAND_UP\" || mode === \"STAND\") rope = \"KEEP ROPE: stiff stand\";\n  else if (mode === \"POLICY\" && wait !== \"\") rope = \"KEEP ROPE: policy waiting\";\n  // training stop latch: > 50 walking, 1..50 stopping, 0 standing still\n  else if (mode === \"POLICY\" && s.hold) rope = s.latch === 0 ? \"standing: rope may slacken\" : \"KEEP ROPE: settling\";\n  else if (mode === \"POLICY\") rope = \"walking\";\n  else if (mode === \"DAMP\") rope = \"DAMP\";\n  return {\n    mode, rope, reason: String(s.reason ?? \"\"), policy_wait: wait,\n    step_ms: num(s.step_ms), latency_ms: num(s.latency_ms), overruns: num(s.overruns),\n    fields_age_s: num(s.fields_age_s), field_solve_s: num(s.field_solve_s),\n    field_error: s.field_error == null ? \"\" : String(s.field_error),\n    waypoint: num(s.waypoint), latch: num(s.latch), reached: Boolean(s.reached), hold: Boolean(s.hold),\n    field_hold: Boolean(s.field_hold), goal_dist_m: goalDist,\n    active_allowed: Boolean(s.active_allowed),\n  };\n}\n"
+  }
+ },
+ "playbackConfig": {
+  "speed": 1
+ },
+ "layout": {
+  "direction": "row",
+  "splitPercentage": 66,
+  "first": "3D!wb",
+  "second": {
+   "direction": "column",
+   "splitPercentage": 16,
+   "first": {
+    "direction": "row",
+    "splitPercentage": 40,
+    "first": "Indicator!mode",
+    "second": "Indicator!rope"
+   },
+   "second": {
+    "direction": "column",
+    "splitPercentage": 52,
+    "first": {
+     "direction": "column",
+     "splitPercentage": 50,
+     "first": "Plot!timing",
+     "second": "Plot!fields"
+    },
+    "second": {
+     "direction": "column",
+     "splitPercentage": 55,
+     "first": "RawMessages!status",
+     "second": "RosOut!log"
+    }
+   }
+  }
+ }
 }

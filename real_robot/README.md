@@ -131,7 +131,15 @@ Alternative (needs robot internet): `real_robot/scripts/g1.sh build all`, then `
 3. **Shadow.** `g1.sh wb shadow --scene sidegap_corridor_048 --anchor-at-robot`. Walk the robot with the
    Unitree controller; check `/g1_wb/status` (latency, step time, fields) and the logs. No motor output.
    Foxglove: `cat_bridge/scripts/perception.sh viz-start` (rosbridge), SSH tunnel as in `cat_bridge/README.md`,
-   layout `real_robot/foxglove/wholebody_layout.json` (virtual boxes, field slice, pelvis, goal, status).
+   layout `real_robot/foxglove/wholebody_layout.json` — the same view in shadow and active runs:
+   * 3D, following the robot (TF `map → g1_wb_pelvis`): the virtual boxes (`esdf_map_virtual`, orange), the ESDF
+     slice at 0.75 m (`/g1_wb/sdf_slice`, turbo, −0.1…1.2 m), the 13 body sites the policy samples
+     (`/g1_wb/sites`, red = touching a virtual box … green ≥ 0.3 m), waypoints and path (green), geofence (red),
+     pelvis and goal arrows. The live scan `/g1_slam/cloud_registered` is off by default (heavy over rosbridge).
+   * Indicators: executor mode, and **rope** (`KEEP ROPE: stiff stand / policy waiting / settling`, then
+     `standing: rope may slacken`, `walking`, `DAMP`) — derived from `/g1_wb/status` by the layout's user script.
+   * Plots: step and LowState→command time (budget 18 ms), fields age / solve time / pelvis-to-field-goal distance;
+     the status as fields; `/rosout` of the executor (mode changes, DAMP reasons).
 4. **Virtual scenes, active** — follow the checklist below; first run with `flat_walk_4m`.
 
 ### Checklist for the first active run (gantry)
@@ -144,8 +152,9 @@ Alternative (needs robot internet): `real_robot/scripts/g1.sh build all`, then `
 - [ ] Free floor measured in the map; `--geofence` inside it with ≥ 0.5 m margin; the virtual scene inside the geofence
 - [ ] `g1.sh slam localize <map>` (or `odom`) running, pose checked in Foxglove
 - [ ] `g1.sh wb active --scene flat_walk_4m --anchor-at-robot --geofence …`, then: `g1.sh op stand` (3 s) →
-      lower until the feet carry weight → `g1.sh op balance` → **wait until the status shows `policy_wait: null`**
-      (the policy has taken over; until then it is a stiff stand without balance) → slacken the rope → `g1.sh op go`
+      lower until the feet carry weight → `g1.sh op balance` → **wait for the rope indicator
+      `standing: rope may slacken`** (status `policy_wait: null`, `latch: 0`: the policy holds the robot and has come
+      to rest; it takes ~1–3 s of steps and up to ~0.25 m first) → slacken the rope → `g1.sh op go`
 - [ ] Any doubt: **L2+B** on the remote or `g1.sh op damp`. `stop` (R1+B) is not immediate: the robot walks on
       until the fields of the hold point are solved (up to ~5 s on the Jetson)
 

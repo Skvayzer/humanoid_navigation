@@ -146,6 +146,12 @@ class Bridge:
         self.slice_pub = self.node.create_publisher(PointCloud2, '/g1_wb/sdf_slice', 1)
         self.pelvis_pub = self.node.create_publisher(PoseStamped, '/g1_wb/pelvis', 5)
         self.goal_pub = self.node.create_publisher(PoseStamped, '/g1_wb/goal', 1)
+        self.sites_pub = self.node.create_publisher(PointCloud2, '/g1_wb/sites', 2)
+        from tf2_msgs.msg import TFMessage
+        from geometry_msgs.msg import TransformStamped
+        self.tf_pub = self.node.create_publisher(TFMessage, '/tf', 10)      # map -> g1_wb_pelvis (viewer follows it)
+        self.TFMessage, self.TransformStamped = TFMessage, TransformStamped
+        self.scene_msg = None
         self.String, self.PoseStamped, self.PointCloud2 = String, PoseStamped, PointCloud2
         from rclpy.executors import SingleThreadedExecutor
         # No spin thread: Foxy's rclpy keeps the GIL while it waits, so a spinning thread stalls the 50 Hz loop
@@ -218,9 +224,34 @@ class Bridge:
         m.pose.orientation.w, m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z = map(float, quat_wxyz)
         return m
 
-    def publish_scene(self, scene):
+    def publish_pelvis_tf(self, frame, xyz, quat_wxyz):
+        t = self.TransformStamped(); t.header.frame_id = frame; t.child_frame_id = 'g1_wb_pelvis'
+        t.header.stamp = self.node.get_clock().now().to_msg()
+        t.transform.translation.x, t.transform.translation.y, t.transform.translation.z = map(float, xyz)
+        r = t.transform.rotation; r.w, r.x, r.y, r.z = map(float, quat_wxyz)
+        self.tf_pub.publish(self.TFMessage(transforms=[t]))
+
+    def publish_scene(self, scene, waypoints=(), fence=None):
+        """Virtual boxes (orange), waypoints and the path through them (green), geofence (red). Republished
+        periodically by the loop: a viewer that connects later (rosbridge) does not always get latched messages."""
         from visualization_msgs.msg import Marker, MarkerArray
+        from geometry_msgs.msg import Point
         arr = MarkerArray()
+
+        def line(ns, points, rgba, kind=Marker.LINE_STRIP, width=0.03):
+            m = Marker(); m.header.frame_id = self.args.map_frame; m.ns = ns; m.id = 0; m.type = kind
+            m.pose.orientation.w = 1.0; m.scale.x = m.scale.y = m.scale.z = width
+            m.color.r, m.color.g, m.color.b, m.color.a = rgba
+            m.points = [Point(x=float(x), y=float(y), z=float(z)) for x, y, z in points]
+            arr.markers.append(m)
+        if len(waypoints):
+            path = [(*scene.start, 0.02)] + [(x, y, 0.02) for x, y in waypoints]
+            line('path', path, (0.2, 0.9, 0.3, 0.9))
+            line('waypoints', [(x, y, GOAL_Z) for x, y in waypoints], (0.2, 0.9, 0.3, 0.9), Marker.SPHERE_LIST, 0.12)
+        if fence is not None:
+            xmin, xmax, ymin, ymax = fence
+            line('geofence', [(xmin, ymin, 0.02), (xmax, ymin, 0.02), (xmax, ymax, 0.02), (xmin, ymax, 0.02), (xmin, ymin, 0.02)],
+                 (1.0, 0.15, 0.15, 1.0), width=0.05)
         for k, b in enumerate(scene.boxes):
             m = Marker(); m.header.frame_id = self.args.map_frame; m.ns = 'virtual_scene'; m.id = k; m.type = Marker.CUBE
             m.pose.position.x, m.pose.position.y, m.pose.position.z = map(float, b['center'])
@@ -229,21 +260,31 @@ class Bridge:
             m.scale.x, m.scale.y, m.scale.z = (2 * float(h) for h in b['half_size'])
             m.color.r, m.color.g, m.color.b, m.color.a = 1.0, 0.45, 0.1, 0.45
             arr.markers.append(m)
+        self.scene_msg = arr
         self.scene_pub.publish(arr)
 
-    def publish_slice(self, fields):
+    def _cloud(self, columns, names):
         from sensor_msgs.msg import PointField
+        pts = np.column_stack(columns).astype('<f4')
+        m = self.PointCloud2(); m.header.frame_id = self.args.map_frame; m.header.stamp = self.node.get_clock().now().to_msg()
+        m.height, m.width = 1, len(pts)
+        m.fields = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, n in enumerate(names)]
+        m.point_step = 4 * len(names); m.row_step, m.is_dense = m.point_step * len(pts), True
+        m.data = array.array('B', pts.tobytes())        # Foxy: assigning bytes validates every element (~40 ms)
+        return m
+
+    def publish_sites(self, positions, sdf):
+        """The policy's body sites in the map with their distance to the virtual obstacles (what the policy sees)."""
+        p = np.asarray(positions, float)
+        self.sites_pub.publish(self._cloud([p[:, 0], p[:, 1], p[:, 2], np.asarray(sdf, float)], ('x', 'y', 'z', 'sdf')))
+
+    def publish_slice(self, fields):
         k = int(np.clip(round((GOAL_Z - fields.origin[2]) / fields.dx), 0, fields.sdf.shape[2] - 1))
         nx, ny = fields.sdf.shape[:2]
         xs = fields.origin[0] + np.arange(nx) * fields.dx; ys = fields.origin[1] + np.arange(ny) * fields.dx
         X, Y = np.meshgrid(xs, ys, indexing='ij')
-        pts = np.column_stack([X.ravel(), Y.ravel(), np.full(X.size, fields.origin[2] + k * fields.dx), fields.sdf[:, :, k].ravel()]).astype('<f4')
-        m = self.PointCloud2(); m.header.frame_id = self.args.map_frame; m.header.stamp = self.node.get_clock().now().to_msg()
-        m.height, m.width = 1, len(pts)
-        m.fields = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, n in enumerate(('x', 'y', 'z', 'intensity'))]
-        m.point_step, m.row_step, m.is_dense = 16, 16 * len(pts), True
-        m.data = array.array('B', pts.tobytes())        # Foxy: assigning bytes validates every element (~40 ms)
-        self.slice_pub.publish(m)
+        self.slice_pub.publish(self._cloud([X.ravel(), Y.ravel(), np.full(X.size, fields.origin[2] + k * fields.dx),
+                                            fields.sdf[:, :, k].ravel()], ('x', 'y', 'z', 'intensity')))
 
 
 def main(argv=None):
@@ -283,10 +324,11 @@ def main(argv=None):
         m = args.geofence_from_scene; fence = (min(xs) - m, max(xs) + m, min(ys) - m, max(ys) + m)
     log.info('scene %s anchored at (%.2f, %.2f, %.1f deg); goal (%.2f, %.2f); geofence %s' %
              (scene.name, anchor[0], anchor[1], np.degrees(anchor[2]), scene.goal[0], scene.goal[1], fence))
-    bridge.publish_scene(scene)
     worker = FieldWorker(scene)
     cfg = rn.Config(mount=args.mount, kp_scale=args.kp_scale, geofence=fence, allow_active=args.active)
     ex = rn.Executor(contract, kin, infer, FieldPlanner(scene), worker, cfg)
+    bridge.publish_scene(scene, ex.planner.waypoints, fence)
+    hand_radii = np.asarray(contract['hand_radii'], float)
     if args.start == 'shadow':
         ex.command('shadow')
 
@@ -340,13 +382,22 @@ def main(argv=None):
                               waypoint=ex.planner.active, reached=ex.planner.reached, hold=ex.planner.hold_xy is not None,
                               fields_age_s=None if ex.fields_time is None else round(now - ex.fields_time, 1),
                               field_solve_s=None if worker.last_compute_s is None else round(worker.last_compute_s, 2),
-                              field_error=worker.last_error, policy_wait=L.get('policy_wait'), active_allowed=args.active)
+                              field_error=worker.last_error, policy_wait=L.get('policy_wait'), active_allowed=args.active,
+                              field_goal=None if ex.field_goal is None else np.round(np.asarray(ex.field_goal)[:2], 2).tolist(),
+                              field_hold=ex.field_hold, latch=int(ex.builder.stop) if ex.builder_ready else None)
                 bridge.status.publish(bridge.String(data=json.dumps(status)))
                 if ex.state is not None and ex.pose is not None:
                     pos, quat, _ = ex._pelvis(ex.state)
                     bridge.pelvis_pub.publish(bridge.pose_msg(args.map_frame, pos, quat))
+                    bridge.publish_pelvis_tf(args.map_frame, pos, quat)
+                    if ex.fields is not None:
+                        sites = kin.world_sites(ex.state.q, pos, quat)
+                        sdf = ex.fields.sample(sites)[2].copy(); sdf[5:7] -= hand_radii    # as the policy sees the hands
+                        bridge.publish_sites(sites, sdf)
                     g = ex.planner.goal
                     bridge.goal_pub.publish(bridge.pose_msg(args.map_frame, [g[0], g[1], GOAL_Z], [1, 0, 0, 0]))
+            if n % 100 == 50 and bridge.scene_msg is not None:
+                bridge.scene_pub.publish(bridge.scene_msg)
             if n % 50 == 25 and ex.fields is not None and ex.fields is not last_slice:
                 last_slice = ex.fields
                 bridge.publish_slice(ex.fields)

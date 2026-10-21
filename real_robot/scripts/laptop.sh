@@ -83,7 +83,7 @@ case "${1:-}" in
   op) docker exec lap-wb bash -c "source /opt/ros/foxy/setup.bash && ros2 topic pub --once /g1_wb/operator std_msgs/msg/String '{data: $2}'" >/dev/null; docker logs --tail 3 lap-wb ;;
   rope) docker exec lap-fake bash -c "source /opt/ros/foxy/setup.bash && ros2 topic pub --once /g1_fake/rope std_msgs/msg/Float32 '{data: $2}'" >/dev/null ;;
   buttons) docker exec lap-fake bash -c "source /opt/ros/foxy/setup.bash && ros2 topic pub --once /g1_fake/buttons std_msgs/msg/String '{data: \"$2\"}'" >/dev/null ;;
-  status) docker exec lap-wb bash -c "source /opt/ros/foxy/setup.bash && timeout 3 ros2 topic echo --once /g1_wb/status" | sed -n 's/^data: //p' ;;
+  status) docker exec lap-wb bash -c "source /opt/ros/foxy/setup.bash && timeout 3 ros2 topic echo --full-length /g1_wb/status" | sed -n 's/^data: //p' | head -1 ;;
   down) docker rm -f lap-slam lap-play lap-rec lap-fake lap-wb >/dev/null 2>&1 || true ;;
   *) sed -n '2,15p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

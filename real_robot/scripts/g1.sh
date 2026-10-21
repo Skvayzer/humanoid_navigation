@@ -119,7 +119,7 @@ case "${1:-status}" in
     for c in "$slam_name" "$wb_name" g1-cat-bridge g1-cat-perception-preview g1-cat-rosbridge; do
       exists "$c" && echo "$c: $(sudo docker inspect --format '{{.State.Status}} {{.Args}}' "$c")" || echo "$c: -"; done
     if running "$wb_name"; then
-      sudo docker exec "$wb_name" bash -c "source /opt/ros/foxy/setup.bash && source /opt/wb/messages/setup.bash && timeout 3 ros2 topic echo --once /g1_wb/status" 2>/dev/null | sed -n 's/^data: //p'; fi ;;
+      sudo docker exec "$wb_name" bash -c "source /opt/ros/foxy/setup.bash && source /opt/wb/messages/setup.bash && timeout 3 ros2 topic echo --full-length /g1_wb/status" 2>/dev/null | sed -n 's/^data: //p' | head -1; fi ;;   # Foxy: no --once
   logs)
     which="${2:-wb}"; [[ "$which" == slam ]] && { tail -n 30 "$runtime/slam/logs/"*.log; exit 0; }
     sudo docker logs --tail 40 "$wb_name" ;;

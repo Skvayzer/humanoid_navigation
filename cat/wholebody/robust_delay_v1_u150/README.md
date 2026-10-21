@@ -11,13 +11,16 @@ Sim-to-sim (plain MuJoCo, physical obstacles; flat 4 m, 0.47 m gap, 0.48 m corri
 | Condition | parent (u596) | this policy |
 |---|---|---|
 | action delay 0 / 10 / 20 ms alone | 20/20, 20/20, 20/20 with 2 falls | 20/20, 20/20, 20/20, **0 falls** |
-| action delay 40 ms | 20/20 fall | 20/20 fall |
+| motor-side latency 30 / 36 / 40 ms (corrected test, see below) | -- | 0 / 0 / 2 falls |
+| action two steps stale (`--action-delay 2`) | 20/20 fall | 20/20 fall |
 | full 20 ms delay + per-step pose noise | 14/20 reached, 9 falls | 16/20 reached, 5 falls |
 | worst case (above + 40 ms pose latency, kp -10%, perception limits) | 13/20 reached, 10 falls | 19/20 reached, 2 falls |
 | robot-like (pose noise at 10 Hz, 40 ms pose latency, 15 ms action latency, kp -10%) | 20/20 | 20/20 |
 
-No obstacle contacts in any run. Limit: keep observation-to-motor delay below ~20 ms; stop the policy on a loop
-overrun (it falls at 40 ms).
+No obstacle contacts in any run. Two delay models: `--action-latency-ms` delays the motors (training and the robot:
+the runtime records what it commanded, the motors act on it late) -- this policy holds up to ~36 ms; `--action-delay N`
+makes the runtime itself use an N-steps-old action (its recorded last action / targets go stale) -- not what our
+runtime does, and both policies fall at N = 2. Keep the loop applying the newest action every step; stop on overruns.
 
 Full deploy bundle (deploy_spec, reference rollouts, TorchScript): training repository
 `outputs/deploy/generalist_robust_delay_v1_u150/`; checkpoint `outputs/saved_checkpoints/generalist_robust_delay_v1_u150.pt`

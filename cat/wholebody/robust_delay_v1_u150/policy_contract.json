@@ -569,12 +569,13 @@
    }
   },
   "sim2sim_plain_mujoco": {
-   "delay_alone": "0/10/20 ms: 20/20 reached, 0 falls each (parent: 2 falls at 20 ms); 40 ms: 20/20 fall (parent too)",
+   "delay_alone": "0/10/20 ms: 20/20 reached, 0 falls each (parent: 2 falls at 20 ms); 40 ms as a stale action (--action-delay 2, the runtime itself two steps behind): 20/20 fall (parent too)",
    "worst_case": "full 20 ms delay + per-step pose noise + 40 ms pose latency + kp -10% + perception limits: 19/20 reached, 2 falls (parent 13/20, 10 falls)",
    "delay_plus_noise": "full 20 ms delay + per-step pose noise: 16/20 reached, 5 falls (parent 14/20, 9 falls)",
    "robot_like": "pose noise at 10 Hz, 40 ms pose latency, 15 ms action latency, kp -10%, perception limits: 20/20, 0 falls (parent 20/20)",
-   "contacts": "0 obstacle contacts in all runs"
+   "contacts": "0 obstacle contacts in all runs",
+   "motor_side_latency": "latency to the motors (the runtime knows what it commanded): 20/30/36 ms 20/20 reached, 0 falls; 40 ms 2/20 falls; 40 ms + pose noise/latency + kp -10% + perception limits 4/20 falls"
   },
-  "limits": "action delay must stay below ~20 ms (falls at 40 ms); a deploy-loop watchdog must stop the policy on an overrun"
+  "limits": "motor-side latency up to ~36 ms without falls (2/20 at 40 ms); the runtime must apply the newest action every step (a runtime two steps behind falls); stop the policy on a loop overrun"
  }
 }

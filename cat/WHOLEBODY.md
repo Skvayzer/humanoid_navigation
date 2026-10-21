@@ -69,6 +69,10 @@ Findings:
 3. On the 25 m corridor course the policy walks sideways along the corridor and falls near a low beam -- the same
    happens in the training simulator, so it is the policy, not the transfer. Use goals within open space first.
 
+Delay options of `wholebody_sim.py`: `--action-latency-ms MS` (0-40) = motor-side latency, the model used in training
+and the one that matches the robot runtime; `--action-delay N` = the runtime applies an N-steps-old action (its own
+recorded last action and targets go stale), a harsher failure mode.
+
 Commands:
 ```bash
 PYTHONPATH=cat python -m unittest cat.tests.test_wholebody -v

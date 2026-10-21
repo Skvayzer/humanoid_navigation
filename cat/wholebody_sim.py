@@ -160,6 +160,7 @@ def run(args):
         camera = mujoco.MjvCamera(); camera.type = mujoco.mjtCamera.mjCAMERA_TRACKING; camera.trackbodyid = 1
         camera.distance, camera.elevation, camera.azimuth = 3.0, -35, 150
     actions = deque([np.zeros(29)]*(args.action_delay+1), maxlen=args.action_delay+1)
+    issued = deque([builder.targets.copy()]*3, maxlen=3)     # targets sent in the last three control periods
     contact_steps, contact_parts, fell, reached = 0, {}, False, False
     trace = {k: [] for k in ('base', 'quat', 'vel', 'command', 'command_delay', 'sdf', 'action', 'active')}
     timing = dict(fields=0., observe=0., policy=0., physics=0.)
@@ -174,6 +175,7 @@ def run(args):
         actions.append(action)
         previous_targets = builder.targets.copy()
         targets = builder.act(actions[0])
+        issued.append(targets.copy())
         late = int(round(args.action_latency_ms/1000/contract['physics_dt']))
         t = time.time()
         feedforward = np.zeros(29)
@@ -182,7 +184,10 @@ def run(args):
         touching = False
         for substep in range(contract['substeps']):
             q, dq = data.qpos[7:], data.qvel[6:]
-            applied = previous_targets if substep < late else targets       # sub-step latency to the motors
+            # Motor-side latency (as training and the robot: the runtime knows what it commanded, the motors act on
+            # it late): track the newest targets issued at least `late` physics substeps ago (up to 2 control periods).
+            age = 0 if substep >= late else (1 if substep+contract['substeps'] >= late else 2)
+            applied = issued[-1-age]
             torque = kp_scale*contract['kp']*(applied-q)-contract['kd']*dq+feedforward
             data.ctrl[:] = np.clip(torque, -contract['torque_limit'], contract['torque_limit'])
             mujoco.mj_step(model, data)

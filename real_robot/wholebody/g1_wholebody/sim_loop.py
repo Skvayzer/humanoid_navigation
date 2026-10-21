@@ -78,7 +78,7 @@ def gantry_schedule(t_go=11.0):
 def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0, 0.5, 0.4), seconds=40.,
         procedure='gantry', pose_hz=10., pose_latency_s=0.06, pose_noise=0.01, action_latency_s=0.010,
         field_latency_s=2.5, field_period_s=1.0, motor_kp_scale=0.9, true_mount='unitree_urdf', exec_mount='unitree_urdf',
-        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True):
+        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True, upper_filter='none', upper_alpha=0.5, upper_cutoff_hz=6.0, upper_rate=0.5):
     contract = load_contract(); kin = FastKinematics(contract)
     clock = SimClock()
     scene_obj = VirtualScene(scene, anchor=anchor)
@@ -87,7 +87,8 @@ def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0
     xs = [scene_obj.start[0], scene_obj.goal[0]] + [b['center'][0] for b in scene_obj.boxes]
     ys = [scene_obj.start[1], scene_obj.goal[1]] + [b['center'][1] for b in scene_obj.boxes]
     fence = (min(xs) - fence_margin, max(xs) + fence_margin, min(ys) - fence_margin, max(ys) + fence_margin)
-    cfg = rn.Config(mount=exec_mount, allow_active=True, geofence=fence, imu_heading=imu_heading)
+    cfg = rn.Config(mount=exec_mount, allow_active=True, geofence=fence, imu_heading=imu_heading, upper_filter=upper_filter,
+                    upper_alpha=upper_alpha, upper_cutoff_hz=upper_cutoff_hz, upper_rate=upper_rate)
     ex = rn.Executor(contract, kin, make_session(policy), planner, fields, cfg, clock=clock)
     hang = None
     if procedure == 'gantry':

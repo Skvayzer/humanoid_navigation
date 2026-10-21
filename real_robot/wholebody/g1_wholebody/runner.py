@@ -68,6 +68,10 @@ class Config:
     remote_balance: frozenset = frozenset({'L1', 'X'}) # STAND -> POLICY, goal = here
     remote_hold_s: float = 0.5
     prefetch_radius_m: float = 2.0          # request the next waypoint's fields this far before the switch
+    upper_filter: str = 'none'              # waist + arms command filter: none | avg2 | avg3 | median3 | ema | butter2 | rate
+    upper_alpha: float = 0.5                # ema: weight of the new target
+    upper_cutoff_hz: float = 6.0            # butter2: 2nd-order Butterworth low-pass cutoff
+    upper_rate: float = 0.5                 # rate: slew limit of the commanded target, rad/s
     hold_goal_tolerance_m: float = 0.5      # 'balance' starts the policy only on hold fields solved this close to here
     limits: Limits = field(default_factory=Limits)
 
@@ -94,6 +98,7 @@ class Executor:
         self.stand_from = None
         self.budget_violations = 0
         self.held = {}                      # remote combo -> first time seen
+        self.upper_state = None             # upper_filter memory (waist + arms)
         self.last = {}                      # diagnostics of the last step
         self.log = []                       # per-step records (caller decides what to keep)
         self.imu_heading_hist = []          # (time, unwrapped IMU heading) for the last ~1 s
@@ -425,19 +430,52 @@ class Executor:
                 self.last['policy_wait'] = 'fields of the hold point'
                 return self._stand(s, 1.)               # never start on another goal's fields: the policy would walk
             obs = self.builder.reset(s.q, pos, quat, self.fields, dq=s.dq, gyro=s.gyro, pelvis_rotation=rot)
-            self.builder_ready = True
+            self.builder_ready = True; self.upper_state = None
         else:
             obs = self.builder.observe(s.q, s.dq, s.gyro, pos, quat, self.fields, pelvis_rotation=rot)
         action = np.asarray(self.infer(obs), float)
         if action.shape != (NUM_BODY,) or not np.isfinite(action).all():
             raise Fault('invalid policy output')
-        targets = self.builder.act(action)
+        policy_targets = self.builder.act(action)
+        targets = self._filter_upper(policy_targets)
         ff = np.zeros(NUM_BODY)
         if self.c['upper_gravity_compensation']:
             ff[12:] = self.kin.upper_gravity(s.q, quat)
-        self.last.update(action=action, targets=targets, command=self.builder.command.copy(), heading=heading(rot),
+        self.last.update(action=action, targets=targets, policy_targets=policy_targets, command=self.builder.command.copy(), heading=heading(rot),
                          goal=np.asarray(self.planner.goal, float).copy())
         return LowCmd.body(s.mode_machine, targets, self.c['kp'] * self.cfg.kp_scale, self.c['kd'], tau=ff)
+
+
+    def _filter_upper(self, raw):
+        """Commanded waist/arm targets (12..28) from the policy's: the policy keeps seeing its own targets in the
+        observation; only the motors get the filtered ones. Legs pass through. State resets when the policy starts."""
+        kind, c = self.cfg.upper_filter, self.cfg
+        if kind == 'none':
+            return raw
+        u, st, out = raw[12:].copy(), self.upper_state, raw.copy()
+        if st is None:
+            st = self.upper_state = dict(raw=[u, u], out=[u, u], last=u)
+        dt = self.c['control_dt']
+        if kind == 'avg2':                          # FIR zero at 25 Hz: cancels a step-to-step flip exactly
+            y = 0.5 * (u + st['raw'][0])
+        elif kind == 'avg3':
+            y = (u + st['raw'][0] + st['raw'][1]) / 3.0
+        elif kind == 'median3':                     # keeps steps, drops single-step spikes
+            y = np.median(np.stack([u, st['raw'][0], st['raw'][1]]), axis=0)
+        elif kind == 'ema':
+            y = c.upper_alpha * u + (1 - c.upper_alpha) * st['out'][0]
+        elif kind == 'butter2':                     # bilinear 2nd-order Butterworth low-pass
+            k = np.tan(np.pi * c.upper_cutoff_hz * dt); n = 1 + np.sqrt(2) * k + k * k
+            b0 = k * k / n; a1 = 2 * (k * k - 1) / n; a2 = (1 - np.sqrt(2) * k + k * k) / n
+            y = b0 * (u + 2 * st['raw'][0] + st['raw'][1]) - a1 * st['out'][0] - a2 * st['out'][1]
+        elif kind == 'rate':                        # tighter slew limit than the training's 2 rad/s
+            step = c.upper_rate * dt
+            y = st['out'][0] + np.clip(u - st['out'][0], -step, step)
+        else:
+            raise Fault('unknown upper_filter %s' % kind)
+        st['raw'] = [u, st['raw'][0]]; st['out'] = [y, st['out'][0]]
+        out[12:] = y
+        return out
 
 
 def _gravity_z(quat_wxyz):

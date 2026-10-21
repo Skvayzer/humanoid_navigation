@@ -44,6 +44,10 @@ def parse(argv=None):
     p.add_argument('--active', action='store_true', help='allow motor commands (gantry procedure; see README)')
     p.add_argument('--start', choices=('idle', 'shadow'), default='idle')
     p.add_argument('--kp-scale', type=float, default=1.0)
+    p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'median3', 'ema', 'butter2', 'rate'), default='none', help='waist/arm command filter (policy dithering)')
+    p.add_argument('--upper-alpha', type=float, default=0.5, help='ema: weight of the new target')
+    p.add_argument('--upper-cutoff-hz', type=float, default=6.0, help='butter2: cutoff')
+    p.add_argument('--upper-rate', type=float, default=0.5, help='rate: slew limit, rad/s')
     p.add_argument('--odom-topic', default='/g1_slam/odometry')
     p.add_argument('--map-frame', default='map'); p.add_argument('--odom-frame', default='camera_init')
     p.add_argument('--log-dir', default=None)
@@ -325,7 +329,9 @@ def main(argv=None):
     log.info('scene %s anchored at (%.2f, %.2f, %.1f deg); goal (%.2f, %.2f); geofence %s' %
              (scene.name, anchor[0], anchor[1], np.degrees(anchor[2]), scene.goal[0], scene.goal[1], fence))
     worker = FieldWorker(scene)
-    cfg = rn.Config(mount=args.mount, kp_scale=args.kp_scale, geofence=fence, allow_active=args.active)
+    cfg = rn.Config(mount=args.mount, kp_scale=args.kp_scale, geofence=fence, allow_active=args.active,
+                    upper_filter=args.upper_filter, upper_alpha=args.upper_alpha, upper_cutoff_hz=args.upper_cutoff_hz,
+                    upper_rate=args.upper_rate)
     ex = rn.Executor(contract, kin, infer, FieldPlanner(scene), worker, cfg)
     bridge.publish_scene(scene, ex.planner.waypoints, fence)
     hand_radii = np.asarray(contract['hand_radii'], float)

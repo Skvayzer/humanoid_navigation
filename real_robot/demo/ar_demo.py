@@ -26,7 +26,9 @@ import cv2
 import numpy as np
 
 # D435i colour camera, factory calibration read from the device (pyrealsense2), per resolution: fx, fy, cx, cy
-INTRINSICS = {(640, 480): (605.8, 606.2, 321.2, 253.2), (1280, 720): (908.7, 909.2, 641.8, 379.8), (424, 240): (302.9, 303.1, 212.6, 126.6)}
+# (1920x1080 = videohub's frames: the 1280x720 calibration x 1.5, same 16:9 field of view)
+INTRINSICS = {(640, 480): (605.8, 606.2, 321.2, 253.2), (1280, 720): (908.7, 909.2, 641.8, 379.8), (424, 240): (302.9, 303.1, 212.6, 126.6),
+              (1920, 1080): (1363.1, 1363.8, 962.7, 569.7)}
 # torso_link -> Mid-360 (real_robot/wholebody frames.MOUNTS['unitree_urdf']) and the FAST-LIO IMU offset (frames.LIDAR_TO_IMU_T)
 MOUNT_XYZ, MOUNT_RPY = (0.0002835, 0.00003, 0.428434), (math.pi, 0.05112069379091391, 0.0)
 LIDAR_TO_IMU_T = (-0.011, -0.02329, 0.04412)
@@ -69,7 +71,8 @@ T_TORSO_CAM = tf(rpy(*D435_RPY), D435_XYZ) @ tf(OPTICAL, COLOR_IN_LINK)
 class Projector:
     def __init__(self, t_map_cam, size):
         w, h = size
-        fx, fy, cx, cy = INTRINSICS.get((w, h)) or tuple(v * w / 640 for v in INTRINSICS[(640, 480)][:3]) + (INTRINSICS[(640, 480)][3] * h / 480,)
+        base = (1280, 720) if abs(w / h - 16 / 9) < 0.02 else (640, 480)    # scale the calibration with the same aspect
+        fx, fy, cx, cy = INTRINSICS.get((w, h)) or tuple(v * w / base[0] for v in INTRINSICS[base])
         self.k = (fx, fy, cx, cy); self.t_cam_map = np.linalg.inv(t_map_cam)
 
     def cam(self, pts):

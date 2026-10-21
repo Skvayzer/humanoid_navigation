@@ -13,9 +13,23 @@ from pathlib import Path
 
 import numpy as np
 
-from g1_wholebody.lowlevel import NUM_BODY, decode_lowstate
+from g1_wholebody.lowlevel import LOWSTATE_CDR_SIZE, LOWSTATE_LAYOUT, NUM_BODY
 
 BLOCK_S = 10.0
+
+
+def decode_many(raw):
+    """Raw CDR LowState messages -> per-field arrays, vectorised (the loop only stores bytes: ~1 kHz in Python)."""
+    n, size = len(raw), LOWSTATE_CDR_SIZE + (-LOWSTATE_CDR_SIZE) % 4
+    buf = np.zeros((n, size), np.uint8)
+    for i, m in enumerate(raw):
+        payload = m[4:4 + size]; buf[i, :len(payload)] = np.frombuffer(payload, np.uint8)
+    f, h, L = buf.view('<f4'), buf.view('<i2'), LOWSTATE_LAYOUT
+    idx = lambda name, step: np.array(L[name][:NUM_BODY]) // step
+    vec = lambda name, k: f[:, L[name][0] // 4: L[name][0] // 4 + k]
+    return dict(tick=buf[:, L['tick'][0]:L['tick'][0] + 4].copy().view('<u4')[:, 0], q=f[:, idx('m.q', 4)], dq=f[:, idx('m.dq', 4)],
+                tau=f[:, idx('m.tau_est', 4)], temperature=h[:, idx('m.temperature', 2)], motor_mode=buf[:, idx('m.mode', 1)],
+                quat=vec('imu.quaternion', 4), gyro=vec('imu.gyroscope', 3), acc=vec('imu.accelerometer', 3))
 
 
 def main():
@@ -48,7 +62,9 @@ def main():
     def flush():
         if not state and not cmd:
             return
-        arrays = {'state_' + k: np.asarray(v) for k, v in state.items()}
+        arrays = {'state_t': np.asarray(state.get('t', []))}
+        if state.get('raw'):
+            arrays.update({'state_' + k: v for k, v in decode_many(state['raw']).items()})
         arrays.update({'cmd_' + k: np.asarray(v) for k, v in cmd.items()})
         name = out / ('motors_%d.npz' % int(time.time() * 1000)); tmp = name.with_suffix('.tmp.npz')
         np.savez(tmp, **arrays); tmp.rename(name)
@@ -63,9 +79,7 @@ def main():
                 taken = take(capsule, low_sub.msg_type, True)
                 if taken is None or taken[0] is None:          # Foxy raw take: (None, info) when nothing is waiting
                     break
-                s = decode_lowstate(taken[0])
-                add(state, t=time.time(), tick=s.tick, q=s.q, dq=s.dq, tau=s.tau, temperature=s.temperature,
-                    motor_mode=s.motor_mode, quat=s.quat_wxyz, gyro=s.gyro, acc=s.acc)
+                add(state, t=time.time(), raw=taken[0])
         rclpy.spin_once(node, timeout_sec=0.005)
         if time.time() - last > BLOCK_S:
             last = time.time(); flush()

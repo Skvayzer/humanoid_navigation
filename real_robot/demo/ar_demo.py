@@ -229,7 +229,7 @@ def main():
             if jpeg is None or jid == last_drawn:
                 continue
             last_drawn = jid
-            img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+            img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_REDUCED_COLOR_2)   # 1920x1080 -> 960x540: half the CPU
             if img is None:
                 continue
             odom = state['odom']

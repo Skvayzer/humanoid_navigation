@@ -36,14 +36,20 @@ common=(--network host --restart no --user "$(id -u):$(id -g)" --read-only --cap
         -e CYCLONEDDS_URI=/opt/cyclonedds.xml -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
         --log-opt max-size=20m --log-opt max-file=3)
 
+dockerfile() {   # BuildKit: as is; legacy builder (robot's Docker 24 without buildx): cache mounts stripped
+  if sudo docker buildx version >/dev/null 2>&1; then echo "$1"; return; fi
+  local legacy="$repo/real_robot/docker/.legacy"; mkdir -p "$legacy"
+  sed 's#--mount=type=cache,target=/ccache ##' "$1" > "$legacy/$(basename "$1")"; echo "$legacy/$(basename "$1")"
+}
+
 case "${1:-status}" in
   build)
     what="${2:-all}"
     bash "$repo/scripts/fetch_runtime.sh"
     if [[ "$what" == slam || "$what" == all ]]; then
-      sudo docker build --platform linux/arm64 -f "$repo/real_robot/docker/slam.Dockerfile" -t "$slam_image" "$repo"; fi
+      sudo docker build --platform linux/arm64 -f "$(dockerfile "$repo/real_robot/docker/slam.Dockerfile")" --target runtime -t "$slam_image" "$repo"; fi
     if [[ "$what" == wholebody || "$what" == all ]]; then
-      sudo docker build --platform linux/arm64 -f "$repo/real_robot/docker/wholebody.Dockerfile" --target runtime -t "$wb_image" "$repo"; fi ;;
+      sudo docker build --platform linux/arm64 -f "$(dockerfile "$repo/real_robot/docker/wholebody.Dockerfile")" --target runtime -t "$wb_image" "$repo"; fi ;;
   load)             # images built on the laptop (laptop.sh build-robot): no robot internet, no compile here
     archive="${2:?archive from laptop.sh build-robot}"
     [[ "$(uname -m)" == aarch64 ]] || { echo "load is for the robot (arm64)" >&2; exit 2; }

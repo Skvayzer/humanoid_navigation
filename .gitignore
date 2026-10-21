@@ -28,3 +28,4 @@ core.*
 
 .venv-sim/
 outputs_sim2sim/
+real_robot/docker/.legacy/

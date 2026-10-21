@@ -28,6 +28,7 @@ class KinematicsTest(unittest.TestCase):
         self.assertFalse(np.allclose(ta, tb))
         np.testing.assert_allclose(fast.frames(a)[0]['torso_link'], ta)
 
+    @unittest.skipIf(__import__('os').environ.get('G1_TIMING_TESTS') == '0', 'timing checks disabled (emulated build)')
     def test_fast_enough(self):
         c = load_contract(); fast = FastKinematics(c); rng = np.random.default_rng(1)
         qs = rng.uniform(c['soft_lower'], c['soft_upper'], (200, 29))

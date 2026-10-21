@@ -97,7 +97,28 @@ real_robot/scripts/laptop.sh sim                                                
 
 ## Robot (from the checkout in `~/workspace/artemvoronov`)
 
-Build once (needs robot internet): `real_robot/scripts/g1.sh build all`, then `g1.sh validate`.
+**Images, preferred: build on the laptop, load on the robot** (no robot internet, no compile on the Jetson):
+
+```bash
+# laptop, once: sudo apt install qemu-user-static binfmt-support   (arm64 emulation for Docker)
+real_robot/scripts/laptop.sh build-robot      # arm64 images under QEMU, emulated tests, archive
+rsync -P ../../results/laptop/images/g1_rr_images_arm64.tar.gz g1:workspace/artemvoronov/cache/
+# robot:
+real_robot/scripts/g1.sh load ~/workspace/artemvoronov/cache/g1_rr_images_arm64.tar.gz
+real_robot/scripts/g1.sh validate             # native tests incl. the timing checks skipped under QEMU
+```
+
+SLAM image: 1.6 GB (was 3.7 GB): the runtime stage installs only the 12 PCL libraries the binaries link; `pcl_ros`/`pcl_conversions` are not linked but pulled all of `libpcl-dev` (PCL/VTK/Qt headers). rosbag2 is in the laptop-only `dev` stage. `build-robot` builds both images in parallel.
+First full emulated build (old single-layer Dockerfile): 72 min. The SLAM builder has one layer per
+package, ordered from stable/expensive to frequently changed: `livox_ros_driver2` → `ndt_omp_ros2` →
+`lidar_localization_ros2` (~40 min under QEMU) → `fast_lio` → `g1_sensor_restamp`. A change rebuilds only that
+package and the ones after it, and ccache (BuildKit cache mount) recompiles only the files that changed.
+Changes in `real_robot/` touch only light copy layers. On the robot's Docker 24 without buildx, `g1.sh build`
+strips the cache mounts (per-package layers still apply, ccache does not persist).
+Under QEMU the code runs ~10–17× slower, so `build-robot` runs the tests with `G1_TIMING_TESTS=0`; the
+step-time watchdog itself is covered by a deterministic test.
+
+Alternative (needs robot internet): `real_robot/scripts/g1.sh build all`, then `g1.sh validate`.
 
 1. **Perception check, standing still.** `g1.sh slam odom`, then
    `real_robot/cat_bridge/scripts/perception.sh start-with-slam` for the CAT ESDF in Foxglove.
@@ -170,7 +191,7 @@ What it took (each found by this loop, none visible in `cat/wholebody_sim.py`, w
 | Executor image (`laptop.sh validate`, Python 3.8, numpy 1.24, ONNX Runtime 1.16.3) | `test_wholebody` 8/8 incl. ONNX action parity, executor tests 30/30 (SDK-library test skipped) |
 | Raw LowState decoder vs `rclpy.serialization` | identical (q, dq, tau, IMU, temperatures, remote, tick) |
 | walk1 replay → restamp → FAST_LIO_G1 → floor anchor → map builder | map 226 k points, 33.3 m path, floor RMS 1.7 cm |
-| End-position error (ICP of first/last scans, as in the report) | **7.2 cm (4.7 cm horizontal), 0.6°**; report: 7.8 cm (4.7 cm horizontal) |
+| End-position error (ICP of first/last scans, as in the report) | **7.2 / 10.7 / 8.3 cm** in three real-time replays (4.7 / 7.3 / 6.3 cm horizontal, 0.6–1.1°); report: 7.8 cm (4.7 cm horizontal). Real-time playback + 3-thread matching is not deterministic |
 | NDT localisation in that map, same bag | vs the mapping trajectory: 1.8 cm mean, 4.2 cm p95, 4.9 cm max |
 | `ros_executor` vs `ros_fake_robot` over real topics, gantry procedure, corridor 0.48 m | reached the goal; 50 Hz loop: period 20.0 ms median / 20.7 ms max, step ≤ 8.8 ms, LowState age ≤ 12.8 ms, 0 overruns |
 | Remote L2+B over ROS | DAMP at once; damping commands (kp 0, kd ≥ 2, CRC) keep coming at 50 Hz |
@@ -192,7 +213,7 @@ site may not change severity (crashed the node at the first DAMP — it still le
 
 ## Open items before the first active run
 
-1. **Robot images**: `g1.sh build all` on the Jetson (arm64, vendor CycloneDDS) not done yet.
+1. **Robot images**: built for arm64 on the laptop (QEMU) with the vendor CycloneDDS; `g1.sh load` + `g1.sh validate` on the Jetson not done yet.
 2. **Jetson timing**: the control step is ~8–11 ms on the laptop; measure in `g1.sh wb shadow` (budget 18 ms).
 3. **LiDAR mount**: `robot_xml` (0.419 m, 0° pitch) vs Unitree URDF (0.428 m, 2.9° pitch). Record a bag with
    `/lowstate` to calibrate; walk1 has no joint states.

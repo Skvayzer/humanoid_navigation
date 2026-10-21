@@ -40,14 +40,19 @@ wait_exit() { docker wait "$1" >/dev/null 2>&1 || true; }
 
 case "${1:-}" in
   build)
-    docker build --platform linux/amd64 -f "$repo/real_robot/docker/slam.Dockerfile" -t "$slam_image" "$repo"
+    docker build --platform linux/amd64 -f "$repo/real_robot/docker/slam.Dockerfile" --target dev -t "$slam_image" "$repo"
     docker build --platform linux/amd64 -f "$repo/real_robot/docker/wholebody.Dockerfile" --target dev -t "$wb_image" "$repo" ;;
   build-robot)      # arm64 images for the Jetson under QEMU (qemu-user-static), saved for g1.sh load
     bash "$repo/scripts/fetch_runtime.sh"
-    docker build --platform linux/arm64 --build-arg MAKE_JOBS="${MAKE_JOBS:-6}" --build-arg COLCON_WORKERS="${COLCON_WORKERS:-2}" \
-      -f "$repo/real_robot/docker/slam.Dockerfile" -t g1-rr-slam:latest "$repo"
-    docker build --platform linux/arm64 -f "$repo/real_robot/docker/wholebody.Dockerfile" --target runtime -t g1-rr-wholebody:latest "$repo"
-    docker run --rm --platform linux/arm64 --network none g1-rr-wholebody:latest validate
+    # both images at once: the SLAM build sits on one huge translation unit most of the time
+    docker build --platform linux/arm64 --build-arg MAKE_JOBS="${MAKE_JOBS:-6}" --target runtime \
+      -f "$repo/real_robot/docker/slam.Dockerfile" -t g1-rr-slam:latest "$repo" > "$out/logs/build_robot_slam.log" 2>&1 & slam_pid=$!
+    docker build --platform linux/arm64 -f "$repo/real_robot/docker/wholebody.Dockerfile" --target runtime \
+      -t g1-rr-wholebody:latest "$repo" > "$out/logs/build_robot_wholebody.log" 2>&1 & wb_pid=$!
+    wait $wb_pid || { echo "executor image failed: $out/logs/build_robot_wholebody.log" >&2; kill $slam_pid 2>/dev/null; exit 1; }
+    wait $slam_pid || { echo "SLAM image failed: $out/logs/build_robot_slam.log" >&2; exit 1; }
+    echo "both arm64 images built"
+    docker run --rm --platform linux/arm64 --network none -e G1_TIMING_TESTS=0 g1-rr-wholebody:latest validate   # timing checks run on the robot
     mkdir -p "$out/images"
     docker save g1-rr-slam:latest g1-rr-wholebody:latest | gzip -1 > "$out/images/g1_rr_images_arm64.tar.gz"
     ls -la "$out/images" ;;

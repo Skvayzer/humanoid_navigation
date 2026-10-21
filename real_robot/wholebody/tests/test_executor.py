@@ -43,7 +43,10 @@ class ExecutorTest(unittest.TestCase):
     def make(self, allow_active=True, geofence=(-10, 10, -10, 10), infer=None):
         self.clock = Clock(); self.scene = VirtualScene('sidegap_plain_047', anchor=(0., 0., 0.))
         self.fields = InstantFields(self.scene)
-        cfg = rn.Config(allow_active=allow_active, geofence=geofence)
+        # safety-logic tests must not depend on how fast this machine is (QEMU is ~10x slower):
+        # the step-time watchdog has its own test below
+        cfg = rn.Config(allow_active=allow_active, geofence=geofence,
+                        limits=rn.Limits(step_budget_s=10., step_hard_limit_s=10.))
         self.calls = []
         def default_infer(obs):
             self.calls.append(obs); return np.zeros(29)
@@ -165,6 +168,21 @@ class ExecutorTest(unittest.TestCase):
         ex.command('stand'); self.run_steps(ex, 160); ex.command('go')
         cmd = self.run_steps(ex, 1)[0]
         self.assert_damped(cmd, 'invalid policy output', ex)
+
+    def test_step_overrun_damps(self):
+        import time as _time
+        slow = {'on': False}
+        def infer(obs):
+            if slow['on']:
+                _time.sleep(0.06)                       # a policy call that blows the 40 ms hard limit
+            return np.zeros(29)
+        ex = self.make(infer=infer); ex.cfg.limits = rn.Limits()      # default timing limits
+        self.run_steps(ex, 2); ex.command('stand'); self.run_steps(ex, 160); ex.command('go'); self.run_steps(ex, 2)
+        slow['on'] = True
+        self.run_steps(ex, 1)
+        self.assertEqual(ex.mode, rn.DAMP); self.assertIn('overrun', ex.reason)
+        cmd = self.run_steps(ex, 1)[0]
+        self.assertTrue(np.all(cmd.kp == 0))
 
     def test_remote_hold_required_for_stand(self):
         ex = self.make(); self.run_steps(ex, 2)

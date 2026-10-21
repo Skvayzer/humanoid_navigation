@@ -12,6 +12,7 @@
 #   g1.sh op <stand|balance|go|stop|damp|reset|shadow|idle>   operator command to the executor
 #   g1.sh up --geofence XMIN XMAX YMIN YMAX [executor args]   whole stack once, then drive it from the remote
 #   g1.sh down                                stop all of it
+#   g1.sh demo [start|stop] [--fps 10]      AR camera video + bag of what the robot sees, one take per walk
 #   g1.sh viz [start|stop]                    Foxglove bridge whose buttons may write /g1_wb/{operator,scene,obstacle_mode,goal_pose}
 #   g1.sh record-motors [start|stop]          full-rate /lowstate + /lowcmd log (read-only)
 #   g1.sh status | logs [slam|wb]
@@ -55,7 +56,9 @@ case "${1:-status}" in
     if [[ "$what" == slam || "$what" == all ]]; then
       sudo docker build --platform linux/arm64 -f "$(dockerfile "$repo/real_robot/docker/slam.Dockerfile")" --target runtime -t "$slam_image" "$repo"; fi
     if [[ "$what" == wholebody || "$what" == all ]]; then
-      sudo docker build --platform linux/arm64 -f "$(dockerfile "$repo/real_robot/docker/wholebody.Dockerfile")" --target runtime -t "$wb_image" "$repo"; fi ;;
+      sudo docker build --platform linux/arm64 -f "$(dockerfile "$repo/real_robot/docker/wholebody.Dockerfile")" --target runtime -t "$wb_image" "$repo"; fi
+    if [[ "$what" == demo || "$what" == all ]]; then
+      sudo docker build --platform linux/arm64 -f "$(dockerfile "$repo/real_robot/docker/demo.Dockerfile")" --target runtime -t g1-rr-demo:latest "$repo"; fi ;;
   load)             # images built on the laptop (laptop.sh build-robot): no robot internet, no compile here
     archive="${2:?archive from laptop.sh build-robot}"
     [[ "$(uname -m)" == aarch64 ]] || { echo "load is for the robot (arm64)" >&2; exit 2; }
@@ -130,6 +133,18 @@ case "${1:-status}" in
     fi
     for _ in $(seq 1 20); do ss -lnt | grep -q "127.0.0.1:9090 " && { echo "viewer bridge on 127.0.0.1:9090 (writable: /g1_wb/operator, scene, obstacle_mode, goal_pose)"; exit 0; }; sleep 1; done
     echo "viewer bridge did not start" >&2; sudo docker logs --tail 20 "$vz" >&2; exit 5 ;;
+  demo)             # AR camera + bag of the viewer topics, one take per walk -> runtime/demo/<time>/{ar.mp4,bag}
+    dm=g1-rr-demo; mkdir -p "$workspace/runtime/demo"
+    if [[ "${2:-start}" == stop ]]; then
+      exists "$dm" && { sudo docker stop --time 15 "$dm" >/dev/null; sudo docker logs "$dm" > "$workspace/runtime/demo/last_container.log" 2>&1; sudo docker rm "$dm" >/dev/null; }
+      echo "demo recorder stopped: $workspace/runtime/demo"; exit 0
+    fi
+    sudo docker image inspect g1-rr-demo:latest >/dev/null 2>&1 || { echo "no g1-rr-demo image: g1.sh build demo (needs internet)" >&2; exit 3; }
+    exists "$dm" && ! running "$dm" && sudo docker rm "$dm" >/dev/null
+    exists "$dm" || sudo docker run --detach --name "$dm" "${common[@]}" --cpus 1.5 --memory 1g \
+      --mount "type=bind,src=$repo/real_robot/demo/ar_demo.py,dst=/opt/demo/ar_demo.py,readonly=true" \
+      --mount "type=bind,src=$workspace/runtime/demo,dst=/data/demo" g1-rr-demo:latest --out /data/demo "${@:3}" >/dev/null
+    sleep 4; sudo docker logs --tail 3 "$dm" 2>&1 ;;
   up)               # the whole stack once (SLAM odom, executor active in IDLE, Foxglove bridge, motor log); then the remote drives it
     shift
     printf '%s\n' "$@" | grep -q -- '--geofence' || { echo "up needs --geofence XMIN XMAX YMIN YMAX (real free floor round the start mark)" >&2; exit 2; }
@@ -138,6 +153,7 @@ case "${1:-status}" in
     "$0" wb active "$@"
     "$0" viz
     "$0" record-motors start || true
+    "$0" demo || true
     cat <<'EOF'
 Remote (hold 0.5 s; L2+B acts at once):
   L2+B  DAMP, from any state        L1+Y  reset: DAMP -> IDLE
@@ -147,7 +163,7 @@ Finish: g1.sh down
 EOF
     ;;
   down)
-    "$0" wb stop; "$0" record-motors stop; "$0" slam stop; "$0" viz stop ;;
+    "$0" demo stop; "$0" wb stop; "$0" record-motors stop; "$0" slam stop; "$0" viz stop ;;
   record-motors)    # full-rate /lowstate + /lowcmd log, read-only (never publishes) -> runtime/wholebody/motor_logs
     mr_name=g1-rr-motorlog; mr_dir="$runtime/wholebody/motor_logs"
     if [[ "${2:-start}" == stop ]]; then

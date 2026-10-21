@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>unitree_api</name><version>0.1.0</version>
+  <description>Unitree service request/response messages (field layout from unitree_sdk2py/idl/unitree_api), used by the
+    demo recorder to ask videohub for camera frames.</description>
+  <maintainer email="artem.voronov@mbzuai.ac.ae">humanoid_navigation real_robot</maintainer>
+  <license>BSD-3-Clause</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>rosidl_default_generators</build_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

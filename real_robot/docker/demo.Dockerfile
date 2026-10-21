@@ -8,7 +8,7 @@ RUN . /opt/ros/foxy/setup.sh && cd /ws && colcon build --merge-install --cmake-a
 FROM ros:foxy-ros-base-focal AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends python3-opencv python3-numpy ros-foxy-rmw-cyclonedds-cpp \
-    ros-foxy-tf2-ros ros-foxy-visualization-msgs ros-foxy-rosbag2 ros-foxy-rosbag2-py ros-foxy-rosbag2-storage-default-plugins \
+    ros-foxy-tf2-ros ros-foxy-visualization-msgs ros-foxy-ros2bag ros-foxy-rosbag2-transport ros-foxy-rosbag2-storage-default-plugins \
     && rm -rf /var/lib/apt/lists/*
 COPY vendor/unitree_cyclone /tmp/unitree_cyclone
 RUN if [ "$(uname -m)" = aarch64 ]; then \

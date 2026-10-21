@@ -8,7 +8,7 @@
 * Overlay: the executor's /g1_wb/virtual_scene (boxes, route, waypoints, geofence) and /g1_wb/goal, projected with the
   D435i colour intrinsics and T_map_cam = T_map_body (SLAM) . T_body_torso (LiDAR mount) . T_torso_d435 (URDF) . optical.
 * Always publishes /g1_wb/ar/compressed (Foxglove). From the moment the executor walks (status: POLICY, not holding)
-  until it has stood still / left POLICY for --stop-after s, writes <out>/<time>/ar.mp4 and <out>/<time>/bag (rosbag2:
+  until it has stood still / left POLICY for --stop-after s, writes <out>/<time>/ar.mp4 and <out>/<time>/bag (ros2 bag:
   the viewer topics + the AR image), to be played side by side in Foxglove for a presentation.
 Read-only towards the robot: it publishes nothing but the videohub request and the AR image.
 """
@@ -17,6 +17,7 @@ import array
 import json
 import math
 import signal
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -143,18 +144,14 @@ def main():
     args = ap.parse_args()
     import rclpy
     from rclpy.node import Node
-    from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
-    from rclpy.serialization import serialize_message
     from rclpy.time import Time
     from tf2_ros import Buffer, TransformListener
-    from rosidl_runtime_py.utilities import get_message
     from sensor_msgs.msg import CompressedImage
     from nav_msgs.msg import Odometry
     from std_msgs.msg import String
     from visualization_msgs.msg import MarkerArray
     from geometry_msgs.msg import PoseStamped
     from unitree_api.msg import Request, Response
-    import rosbag2_py
 
     rclpy.init()
     node = Node('ar_demo', namespace='g1_wb', cli_args=['--ros-args', '-r', 'tf:=/tf', '-r', 'tf_static:=/tf_static'])
@@ -182,31 +179,22 @@ def main():
             pass
     node.create_subscription(String, '/g1_wb/status', on_status, 5)
 
-    # raw subscriptions: bag bytes as they come, only while a take is open
-    def bagger(topic):
-        def cb(raw):
-            take = state['take']
-            if take is not None:
-                with lock:
-                    take['writer'].write(topic, raw, node.get_clock().now().nanoseconds)
-        return cb
-    for topic, typ in VIEWER_TOPICS.items():
-        qos = QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL) if topic == '/tf_static' else 10
-        node.create_subscription(get_message(typ), topic, bagger(topic), qos, raw=True)
-
     def open_take():
+        """Foxy has no Python bag writer (rosbag2_py came with Galactic): the take's bag is a `ros2 bag record`."""
         d = Path(args.out) / time.strftime('%Y%m%d_%H%M%S'); d.mkdir(parents=True, exist_ok=True)
-        w = rosbag2_py.SequentialWriter()
-        w.open(rosbag2_py.StorageOptions(uri=str(d / 'bag'), storage_id='sqlite3'), rosbag2_py.ConverterOptions('cdr', 'cdr'))
-        for topic, typ in list(VIEWER_TOPICS.items()) + [('/g1_wb/ar/compressed', 'sensor_msgs/msg/CompressedImage')]:
-            w.create_topic(rosbag2_py.TopicMetadata(name=topic, type=typ, serialization_format='cdr'))
+        rec = subprocess.Popen(['ros2', 'bag', 'record', '-o', str(d / 'bag'), *VIEWER_TOPICS, '/g1_wb/ar/compressed'],
+                               stdout=open(d / 'bag_record.log', 'w'), stderr=subprocess.STDOUT)
         log.info('take %s: recording' % d)
-        return dict(dir=d, writer=w, video=None, frames=0, started=time.time())
+        return dict(dir=d, recorder=rec, video=None, frames=0, started=time.time())
 
     def close_take(take):
         if take['video'] is not None:
             take['video'].release()
-        del take['writer']                                   # closes the bag
+        take['recorder'].send_signal(signal.SIGINT)
+        try:
+            take['recorder'].wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            take['recorder'].kill()
         log.info('take %s: %d frames, %.0f s' % (take['dir'], take['frames'], time.time() - take['started']))
 
     stop = []
@@ -234,8 +222,7 @@ def main():
                 state['quiet_since'] = state['quiet_since'] or now
                 if now - state['quiet_since'] > args.stop_after:
                     take, state['take'] = state['take'], None
-                    with lock:
-                        close_take(take)
+                    close_take(take)
             if jpeg is None or jid == last_drawn:
                 continue
             last_drawn = jid
@@ -260,8 +247,6 @@ def main():
             ar_pub.publish(msg)
             take = state['take']
             if take is not None:
-                with lock:
-                    take['writer'].write('/g1_wb/ar/compressed', serialize_message(msg), node.get_clock().now().nanoseconds)
                 if take['video'] is None:
                     take['video'] = cv2.VideoWriter(str(take['dir'] / 'ar.mp4'), cv2.VideoWriter_fourcc(*'mp4v'), args.fps,
                                                     (img.shape[1], img.shape[0]))

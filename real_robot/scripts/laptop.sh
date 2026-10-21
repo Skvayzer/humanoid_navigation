@@ -59,7 +59,7 @@ case "${1:-}" in
   sim)
     shift
     docker rm -f lap-fake lap-wb >/dev/null 2>&1 || true
-    docker run -d --name lap-fake "${keep[@]}" "$wb_image" fake --gantry --scene "${SCENE:-sidegap_corridor_048}" >/dev/null
+    docker run -d --name lap-fake "${keep[@]}" "$wb_image" fake --gantry --scene "${SCENE:-sidegap_corridor_048}" ${FAKE_ARGS:-} >/dev/null
     sleep 3
     docker run -d --name lap-wb "${keep[@]}" --shm-size 256m --mount "type=bind,src=$out/logs,dst=/data/logs" "$wb_image" run \
       --scene "${SCENE:-sidegap_corridor_048}" --anchor-at-robot --geofence-from-scene 1.0 --active --log-dir /data/logs "$@" >/dev/null

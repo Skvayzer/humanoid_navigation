@@ -6,7 +6,11 @@
   MotorState objects 500 times a second would cost a large share of a Jetson core and the GIL.
 * Wireless-remote buttons as in unitree_sdk2py/utils/joystick.py (bytes 2-3 of wireless_remote).
 """
+import ctypes
+import os
+import platform
 import struct
+from pathlib import Path
 
 import numpy as np
 
@@ -46,9 +50,37 @@ def crc32_core(words):
     return crc
 
 
+def _load_sdk_crc():
+    """The SDK's crc32_core (unitree_sdk2py/utils/lib/crc_<arch>.so): ~0.01 ms instead of ~0.4 ms in Python.
+    Used only if it reproduces the Python reference on a test vector; G1_SDK_CRC=python forces the fallback."""
+    if os.environ.get('G1_SDK_CRC') == 'python':
+        return None
+    name = {'x86_64': 'crc_amd64.so', 'aarch64': 'crc_aarch64.so'}.get(platform.machine())
+    dirs = [os.environ.get('G1_SDK_CRC_DIR'),
+            str(Path(__file__).resolve().parents[3] / 'third_party/unitree_sdk2_python/unitree_sdk2py/utils/lib')]
+    for d in dirs:
+        if not d or not name or not (Path(d) / name).exists():
+            continue
+        try:
+            lib = ctypes.CDLL(str(Path(d) / name))
+            fn = lib.crc32_core; fn.argtypes = (ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint32); fn.restype = ctypes.c_uint32
+            words = [(i * 2654435761) & 0xFFFFFFFF for i in range(251)]
+            if fn((ctypes.c_uint32 * len(words))(*words), len(words)) == crc32_core(words):
+                return fn
+        except OSError:
+            pass
+    return None
+
+
+_SDK_CRC = _load_sdk_crc()
+CRC_IMPLEMENTATION = 'sdk' if _SDK_CRC is not None else 'python'
+
+
 def crc_of_packed(packed):
     """CRC over all little-endian 32-bit words except the last one (the crc field itself), as the SDK does."""
     count = len(packed) // 4 - 1
+    if _SDK_CRC is not None:
+        return _SDK_CRC((ctypes.c_uint32 * count).from_buffer_copy(packed, 0), count)
     return crc32_core(struct.unpack_from('<%dI' % count, packed))
 
 

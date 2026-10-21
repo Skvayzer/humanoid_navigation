@@ -30,6 +30,14 @@ class LowLevelTest(unittest.TestCase):
             self.assertEqual(cmd.crc, reference)
         self.assertEqual(len(cmd.pack()), 1004)
 
+    def test_fast_and_python_crc_agree(self):
+        rng = np.random.default_rng(5)
+        for _ in range(20):
+            cmd = ll.LowCmd.body(5, rng.normal(size=29), rng.uniform(0, 300, 29), rng.uniform(0, 10, 29), tau=rng.normal(size=29))
+            packed = cmd.pack(crc=0)
+            words = struct.unpack('<%dI' % (len(packed) // 4 - 1), packed[:-4])
+            self.assertEqual(ll.crc_of_packed(packed), ll.crc32_core(words))
+
     def test_crc_matches_sdk_bitwise_reference(self):
         # SDK utils/crc.py _crc_py, copied: the bit-wise definition.
         def crc_py(data):

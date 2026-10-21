@@ -28,11 +28,12 @@ COPY cat/wholebody /opt/wb/cat/wholebody
 COPY cat/tests/test_wholebody.py cat/tests/wholebody_reference.npz /opt/wb/cat/tests/
 COPY real_robot/wholebody/g1_wholebody /opt/wb/g1_wholebody
 COPY real_robot/wholebody/tests /opt/wb/tests
+COPY third_party/unitree_sdk2_python/unitree_sdk2py/utils/lib/crc_amd64.so third_party/unitree_sdk2_python/unitree_sdk2py/utils/lib/crc_aarch64.so /opt/wb/sdk_crc/
 COPY real_robot/docker/wholebody_entrypoint.sh /opt/wb/entrypoint.sh
 RUN chmod 0555 /opt/wb/entrypoint.sh && mkdir -p /data/logs && chown -R 1000:1000 /data
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=0 HOME=/tmp/wb_home ROS_LOG_DIR=/tmp/ros_logs \
     LD_LIBRARY_PATH=/usr/local/lib:/opt/ros/foxy/lib/aarch64-linux-gnu:/opt/ros/foxy/lib \
-    PYTHONPATH=/opt/wb:/opt/wb/cat \
+    PYTHONPATH=/opt/wb:/opt/wb/cat G1_SDK_CRC_DIR=/opt/wb/sdk_crc \
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 USER 1000:1000
 STOPSIGNAL SIGINT

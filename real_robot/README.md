@@ -174,6 +174,14 @@ What it took (each found by this loop, none visible in `cat/wholebody_sim.py`, w
 | NDT localisation in that map, same bag | vs the mapping trajectory: 1.8 cm mean, 4.2 cm p95, 4.9 cm max |
 | `ros_executor` vs `ros_fake_robot` over real topics, gantry procedure, corridor 0.48 m | reached the goal; 50 Hz loop: period 20.0 ms median / 20.7 ms max, step ≤ 8.8 ms, LowState age ≤ 12.8 ms, 0 overruns |
 | Remote L2+B over ROS | DAMP at once; damping commands (kp 0, kd ≥ 2, CRC) keep coming at 50 Hz |
+| Executor CPU with LowState at 500 Hz (as on the robot) | main process 17 % of a core idle, 30 % in POLICY (was ~100 %); field worker 100 % while solving |
+| LowCmd CRC | SDK library `crc_<arch>.so` (checked against the Python reference at load): pack + CRC 0.07 ms (was 0.4 ms) |
+
+CPU: `/lowstate` is no longer an rclpy callback (each costs ~0.3 ms of Python on the laptop, 500 per second on the
+robot); the loop takes the newest sample itself from a KEEP_LAST-1 subscription on a node the executor never spins,
+and otherwise waits to its deadline in one call (Foxy releases the GIL while waiting). Note: Foxy's raw take returns
+`(None, info)` when nothing is waiting. `latency_ms` in the status is now measured from that take (the sample itself
+is at most 2 ms older at 500 Hz).
 
 Bugs this run found and fixed (all would have hit the robot): Python TF in a namespaced Foxy node uses
 relative `tf`/`tf_static` (floor anchor/map builder published into `/g1_slam/tf_static`); a Foxy logger call

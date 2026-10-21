@@ -12,6 +12,8 @@ manifests
 tests
 artifacts
 third_party
+!third_party/unitree_sdk2_python/unitree_sdk2py/utils/lib/crc_amd64.so
+!third_party/unitree_sdk2_python/unitree_sdk2py/utils/lib/crc_aarch64.so
 visualization
 docs
 host

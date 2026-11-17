@@ -66,6 +66,12 @@ def main():
     rclpy.init()
     node = Node('floor_anchor', namespace='g1_slam', cli_args=['--ros-args', '-r', 'tf:=/tf', '-r', 'tf_static:=/tf_static'])   # Foxy: TF topics are relative
     log = node.get_logger()
+    # started with '&' by run_slam.sh (non-interactive bash): SIGINT arrives ignored; without handlers 'g1.sh slam stop'
+    # waits the full docker stop timeout
+    import signal
+    def _stop(*_):
+        raise SystemExit(0)
+    signal.signal(signal.SIGINT, _stop); signal.signal(signal.SIGTERM, _stop)
     if from_json is not None:
         info = json.load(open(from_json))
         publish(node, StaticTransformBroadcaster, TransformStamped, np.array(info['T_map_slam_map']))

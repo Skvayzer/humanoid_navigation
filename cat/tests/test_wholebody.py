@@ -128,6 +128,32 @@ class WholeBodyTest(unittest.TestCase):
         actions = session.run(None, {'obs': self.data['obs'].astype(np.float32)})[0]
         self.assertLess(float(np.abs(actions-self.data['action']).max()), 1e-5)
 
+    def test_hand_protective_variants(self):
+        """stationary_hands_*: same runtime contract as the main policy, own ONNX hash, reproduce their training actions."""
+        import hashlib, json
+        wholebody = Path(__file__).resolve().parents[1]/'wholebody'
+        main = json.loads((wholebody/'policy_contract.json').read_text())
+        own = {'name', 'checkpoint_sha256', 'policy_onnx', 'robustness'}
+        try:
+            import onnxruntime
+        except ImportError:
+            onnxruntime = None
+        for name in ('stationary_hands_S2far_u200', 'stationary_hands_S2far2_u330', 'stationary_hands_T2_u410', 'stationary_hands_E2_u300'):
+            with self.subTest(policy=name):
+                folder = wholebody/name
+                variant = json.loads((folder/'policy_contract.json').read_text())
+                self.assertEqual(variant['name'], name)
+                self.assertEqual({k: v for k, v in variant.items() if k not in own}, {k: v for k, v in main.items() if k not in own})
+                info = variant['policy_onnx']
+                content = (folder/info['file']).read_bytes()
+                self.assertEqual((len(content), hashlib.sha256(content).hexdigest()), (info['size'], info['sha256']))
+                if onnxruntime is None:
+                    continue
+                reference = np.load(folder/'reference_actions.npz')
+                session = onnxruntime.InferenceSession(str(folder/info['file']), providers=['CPUExecutionProvider'])
+                actions = session.run(None, {'obs': reference['obs']})[0]
+                self.assertLess(float(np.abs(actions-reference['action']).max()), 1e-5)
+
     def test_robust_policy_variant(self):
         """robust_delay_v1_u150: same runtime contract as the main policy, own ONNX hash, reproduces its training actions."""
         import hashlib, json

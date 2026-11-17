@@ -19,7 +19,9 @@
 #   g1.sh record-motors [start|stop]          full-rate /lowstate + /lowcmd log (read-only)
 #   g1.sh status | logs [slam|wb]
 # executor args: --scene NAME (--anchor X Y YAW | --anchor-at-robot) [--geofence XMIN XMAX YMIN YMAX]
-#                [--policy u596|robust_delay_v1_u150] [--mount unitree_urdf|robot_xml]
+#                [--policy u596|robust_delay_v1_u150|stationary_hands_S2far_u200|stationary_hands_S2far2_u330|stationary_hands_T2_u410|
+#                          stationary_hands_E2_u300]
+#                [--mount unitree_urdf|robot_xml]
 # Everything on disk stays in $G1_WORKSPACE (default: the directory that contains this checkout).
 set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

@@ -46,7 +46,7 @@ class Limits:
     max_tilt_deg: float = 45.0              # pelvis IMU
     min_pelvis_z_m: float = 0.45            # the sim's fall criterion
     joint_margin_rad: float = 0.20          # beyond the contract's soft limits
-    max_policy_s: float = 180.0
+    max_policy_s: float = 0.0               # POLICY time limit [s]; 0: none (was 180 s for the first gantry runs)
     max_motor_temp_c: int = 90
 
 
@@ -395,7 +395,7 @@ class Executor:
                     raise Fault('outside geofence (%.2f, %.2f)' % (x, y))
                 if z < L.min_pelvis_z_m:
                     raise Fault('pelvis height %.2f m' % z)
-            if now - self.policy_started > L.max_policy_s:
+            if L.max_policy_s > 0 and now - self.policy_started > L.max_policy_s:
                 raise Fault('policy time limit')
 
     def _remote(self, now, s):

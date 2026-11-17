@@ -259,6 +259,20 @@ site may not change severity (crashed the node at the first DAMP — it still le
 (~60 ms every 10 s) and a schedule-reset bug stalled the loop until the LowState watchdog fired. Also: rosbag2
 (Foxy) cannot open a read-only bag (`laptop.sh` replays a working copy).
 
+## Hand-protective policies (2026-11-17)
+
+Three more whole-body policies ship next to `u596` and `robust_delay_v1_u150` (nothing replaced; the default stays
+`robust_delay_v1_u150`). Same runtime contract and training randomisation; select with `--policy <name>`:
+
+| `--policy` | For |
+|---|---|
+| `stationary_hands_S2far_u200` | standing hand protection (needs fields that see moving objects: not with the current per-waypoint fields) |
+| `stationary_hands_T2_u410` | walking between tables facing forward with the hands raised (gaps >= 0.54 m) |
+| `stationary_hands_E2_u300` | all-round traversal, energy-priced |
+
+Each folder's README has its simulation results and limits. None is sim-to-sim tested yet: start in `shadow`, then
+`active` on the gantry.
+
 ## Open items before the first active run
 
 1. ~~**Robot images**~~: done 2026-10-21 — `g1.sh load` of the laptop-built arm64 archive, `g1.sh validate` on

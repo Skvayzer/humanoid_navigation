@@ -10,6 +10,13 @@ model that `checkpoint_manifest.json` pins. Nothing here commands motors.
 |---|---|---|
 | `wholebody/` | `generalist_finetune_v1_u596` | original; no action-latency training |
 | `wholebody/robust_delay_v1_u150/` | `generalist_robust_delay_v1_u150` | **action-delay and perturbation resistant** (0-20 ms delay, pose/mount noise, friction, mass); same contract and runtime -- see its README |
+| `wholebody/stationary_hands_S2far_u200/` | `stationary_hands_S2far_u200` | **standing hand protection**: the threatened hand retreats, the feet stay planted; moving objects are not seen by the robot's fields yet -- see its README |
+| `wholebody/stationary_hands_T2_u410/` | `stationary_hands_T2_u410` | **table passages**: between tables facing forward with the hands raised (gaps >= 0.54 m) -- see its README |
+| `wholebody/stationary_hands_E2_u300/` | `stationary_hands_E2_u300` | **all-round, energy-priced**: best traversal of the hand-protective policies, lowest energy per metre -- see its README |
+
+The three `stationary_hands_*` folders (2026-11-17) keep the robust variant's runtime contract and training
+randomisation; `cat/tests/ship_wholebody_variant.py` made them from the training repository's deploy bundles and
+refuses any runtime difference. Select with `--policy <folder name>`; the default stays `robust_delay_v1_u150`.
 
 ## Files
 

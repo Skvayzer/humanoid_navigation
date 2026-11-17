@@ -31,11 +31,14 @@ from .kinematics import FastKinematics
 from .lowlevel import decode_lowstate, NUM_MOTORS
 
 POLICIES = {'u596': WHOLEBODY, 'robust_delay_v1_u150': WHOLEBODY / 'robust_delay_v1_u150'}
+# Hand-protective variants (2026-11-17): same runtime contract, own folders; see cat/WHOLEBODY.md and each README.
+HAND_POLICIES = ('stationary_hands_S2far_u200', 'stationary_hands_T2_u410', 'stationary_hands_E2_u300')
+POLICIES.update({name: WHOLEBODY / name for name in HAND_POLICIES})
 
 
 def parse(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--policy', default='robust_delay_v1_u150', help='u596 | robust_delay_v1_u150 | <dir with policy.onnx + policy_contract.json>')
+    p.add_argument('--policy', default='robust_delay_v1_u150', help='u596 | robust_delay_v1_u150 | ' + ' | '.join(HAND_POLICIES) + ' | <dir with policy.onnx + policy_contract.json>')
     p.add_argument('--scene', required=True, help='cat/wholebody/scenes/<name> or a scene JSON file')
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument('--anchor', nargs=3, type=float, metavar=('X', 'Y', 'YAW'), help='scene start pose in the map')

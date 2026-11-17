@@ -42,7 +42,7 @@ class Preprocess
   string time_field = "time";    // PointCloud2: name of the per-point time field
   int time_unit = NS;            // PointCloud2: its unit (TIME_UNIT)
   bool time_absolute = false;    // PointCloud2: absolute time (e.g. livox_ros_driver2 `timestamp`),
-                                 // otherwise time after the header stamp (e.g. G1 vendor `time`)
+                                 // otherwise time after the header stamp (e.g. a Velodyne-style `time`)
 
   private:
   bool keep(uint64_t seed, size_t i) const;

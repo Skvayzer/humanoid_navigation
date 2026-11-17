@@ -1,8 +1,5 @@
 build
-Log/*.png
-Log/*.txt
-Log/*.csv
-Log/*.pdf
+fast_lio_time_log.csv
 .vscode/c_cpp_properties.json
 .vscode/settings.json
 __pycache__/

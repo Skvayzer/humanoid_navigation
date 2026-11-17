@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# SLAM for the whole-body pipeline, inside the SLAM image (real_robot/docker/slam.Dockerfile).
-#   run_slam.sh odom                 restamp + FAST_LIO_G1 + floor anchor (map = floor frame at the start mark)
-#   run_slam.sh mapping <name>       odom + map_builder; stop (SIGINT/SIGTERM) to save /data/maps/<name>.*
-#   run_slam.sh localize <name>      restamp + FAST_LIO_G1 + NDT in /data/maps/<name>.pcd from its start pose
-# The robot must stand still on the start mark for the first ~5 s (IMU init, floor anchor).
+# SLAM for the whole-body pipeline, inside the SLAM image (real_robot/docker/slam.Dockerfile): FAST_LIO_G1 (IMU restamp,
+# odometry, localization on a saved .vmap) + the floor anchor (map -> slam_map) + the clouds for the viewer/executor.
+#   run_slam.sh odom                 SLAM; map = floor frame at the start mark (measured)
+#   run_slam.sh mapping <name>       odom + map_builder; stop (SIGINT/SIGTERM) to save /data/maps/<name>.vmap (FAST-LIO)
+#                                    and <name>{_raw.pcd,.pcd,_path.csv,_info.json} (map_builder); then g1.sh static-esdf <name>
+#   run_slam.sh localize <name>      relocalization on /data/maps/<name>.vmap anywhere on the map (no start mark);
+#                                    map = that map's floor frame (<name>_floor.json from g1.sh static-esdf)
+# The robot must stand still for the first ~5 s (IMU init 3 s, floor anchor).
 set -eo pipefail
 source /opt/ros/foxy/setup.bash; source /opt/g1_slam_ws/install/setup.bash
 set -u
@@ -27,45 +30,45 @@ for _ in $(seq 1 20); do
 done
 [[ "$(ros2 topic type /utlidar/imu_livox_mid360 2>/dev/null)" == sensor_msgs/msg/Imu ]] || { echo "vendor LiDAR/IMU topics not visible" >&2; exit 7; }
 
-if [[ "${G1_SKIP_RESTAMP:-0}" != 1 ]]; then      # laptop: 1 = replay the recorded /g1/imu instead
-  ros2 run g1_sensor_restamp restamp_node --ros-args -r __node:=g1_sensor_restamp \
-    --params-file "$(ros2 pkg prefix g1_sensor_restamp)/share/g1_sensor_restamp/config/restamp.yaml" > /data/logs/restamp.log 2>&1 &
-  pids+=($!)
-fi
-ros2 run fast_lio fastlio_mapping --ros-args -r __node:=fast_lio -r __ns:=/g1_slam --params-file "$cfg/fastlio_g1.yaml" \
-  -r /Odometry:=/g1_slam/odometry -r /path:=/g1_slam/path -r /cloud_registered:=/g1_slam/cloud_registered \
-  -r /cloud_registered_body:=/g1_slam/cloud_registered_body -r /map_save:=/g1_slam/map_save > /data/logs/fast_lio.log 2>&1 &
-pids+=($!)
-
+lio=(--ros-args -r __node:=fast_lio -r __ns:=/g1_slam --params-file "$cfg/fastlio_g1.yaml" -r tf:=/tf -r tf_static:=/tf_static
+     -r /trajectory:=/g1_slam/path)
 case "$mode" in
-  odom|mapping)
-    : > /data/logs/floor_anchor.log      # truncate here: the background redirect below may run after the first grep
-    python3 "$tools/floor_anchor.py" "/data/logs/floor_anchor_$(date -u +%Y%m%dT%H%M%SZ).json" > /data/logs/floor_anchor.log 2>&1 &
-    pids+=($!)
-    for _ in $(seq 1 60); do grep -q 'map -> camera_init fixed' /data/logs/floor_anchor.log 2>/dev/null && break; sleep 1; done
-    grep 'map -> camera_init fixed' /data/logs/floor_anchor.log || { echo "floor anchor failed; see /data/logs/floor_anchor.log" >&2; exit 8; }
-    if [[ "$mode" == mapping ]]; then
-      [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "mapping needs a simple map name" >&2; exit 2; }
-      [[ ! -e "/data/maps/$name.pcd" ]] || { echo "refusing to overwrite /data/maps/$name.pcd" >&2; exit 3; }
-      python3 "$tools/map_builder.py" /data/maps "$name" > /data/logs/map_builder.log 2>&1 &
-      mb=$!; pids+=($mb)
-      echo "MAPPING $name: walk the robot slowly through the room and back to the start mark; stop to save."
-    else
-      echo "ODOM: map = floor frame at the start mark."
-    fi ;;
+  mapping)
+    [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "mapping needs a simple map name" >&2; exit 2; }
+    [[ ! -e "/data/maps/$name.vmap" && ! -e "/data/maps/$name.pcd" ]] || { echo "refusing to overwrite /data/maps/$name.*" >&2; exit 3; }
+    lio+=(-p map_save:=true -p "map_file_path:=/data/maps/$name") ;;
   localize)
-    [[ -r "/data/maps/$name.pcd" && -r "/data/maps/$name.yaml" ]] || { echo "map /data/maps/$name.{pcd,yaml} missing" >&2; exit 4; }
-    ros2 run lidar_localization_ros2 lidar_localization_node --ros-args -r __node:=ndt_localizer -r __ns:=/g1_localization \
-      --params-file "$cfg/ndt_g1.yaml" --params-file "/data/maps/$name.yaml" \
-      -r cloud:=/g1_slam/cloud_registered_body -r odom:=/g1_slam/odometry -r initialpose:=/initialpose > /data/logs/ndt_localizer.log 2>&1 &
-    pids+=($!)
-    svc=/g1_localization/ndt_localizer/change_state
-    for _ in $(seq 1 40); do ros2 service list --no-daemon 2>/dev/null | grep -qx "$svc" && break; sleep 0.25; done
-    ros2 service call "$svc" lifecycle_msgs/srv/ChangeState '{transition: {id: 1}}' | grep -Eq 'success[=:] *(True|true)' || { echo "NDT configure failed" >&2; exit 11; }
-    ros2 service call "$svc" lifecycle_msgs/srv/ChangeState '{transition: {id: 3}}' | grep -Eq 'success[=:] *(True|true)' || { echo "NDT activate failed" >&2; exit 12; }
-    echo "LOCALIZE in $name from its start pose." ;;
+    for f in "$name.vmap" "${name}_floor.json"; do
+      [[ -r "/data/maps/$f" ]] || { echo "/data/maps/$f missing (localize needs a FAST_LIO_G1 map + g1.sh static-esdf $name)" >&2; exit 4; }
+    done
+    lio+=(-p "localization.map_file:=/data/maps/$name.vmap") ;;
+  odom) ;;
   *) echo "usage: $0 odom | mapping <name> | localize <name>" >&2; exit 2 ;;
 esac
+ros2 run fast_lio fastlio_mapping "${lio[@]}" > /data/logs/fast_lio.log 2>&1 &
+pids+=($!)
+
+: > /data/logs/floor_anchor.log      # truncate here: the background redirect below may run after the first grep
+if [[ "$mode" == localize ]]; then
+  python3 "$tools/floor_anchor.py" --from-json "/data/maps/${name}_floor.json" > /data/logs/floor_anchor.log 2>&1 &
+  pids+=($!)
+  for _ in $(seq 1 60); do grep -q 'Localization: localized' /data/logs/fast_lio.log 2>/dev/null && break; sleep 1; done
+  grep 'Localization: ' /data/logs/fast_lio.log | tail -1
+  grep -q 'Localization: localized' /data/logs/fast_lio.log || { echo "not localized after 60 s: set the pose in Foxglove (3D panel, pose estimate, display frame map) or move the robot; see /data/logs/fast_lio.log" >&2; }
+  echo "LOCALIZE in $name."
+else
+  python3 "$tools/floor_anchor.py" "/data/logs/floor_anchor_$(date -u +%Y%m%dT%H%M%SZ).json" > /data/logs/floor_anchor.log 2>&1 &
+  pids+=($!)
+  for _ in $(seq 1 60); do grep -q 'map -> slam_map fixed' /data/logs/floor_anchor.log 2>/dev/null && break; sleep 1; done
+  grep 'map -> slam_map fixed' /data/logs/floor_anchor.log || { echo "floor anchor failed; see /data/logs/floor_anchor.log" >&2; exit 8; }
+  if [[ "$mode" == mapping ]]; then
+    python3 "$tools/map_builder.py" /data/maps "$name" > /data/logs/map_builder.log 2>&1 &
+    pids+=($!)
+    echo "MAPPING $name: walk the robot slowly through the room and back to the start mark; stop to save."
+  else
+    echo "ODOM: map = floor frame at the start mark."
+  fi
+fi
 # viewer / executor clouds; not in pids: a relay crash must not stop SLAM (map_builder publishes the map when mapping)
 python3 "$tools/cloud_relay.py" $([[ "$mode" == mapping ]] && echo --no-map) > /data/logs/cloud_relay.log 2>&1 &
 relay=$!

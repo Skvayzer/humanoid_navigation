@@ -1,4 +1,5 @@
-# SLAM for the whole-body pipeline: g1_sensor_restamp + FAST_LIO_G1 + NDT localisation (no Nav2, no Open3D).
+# SLAM for the whole-body pipeline: FAST_LIO_G1 (odometry, IMU restamp, localization and relocalization on a saved
+# .vmap) + the floor anchor and clouds in Python (no Nav2, no Open3D). NDT and g1_sensor_restamp are no longer built.
 # Build context: repository root.  arm64 (robot) uses the repo's Unitree CycloneDDS runtime; amd64 (laptop) the stock one.
 FROM ros:foxy-ros-base-focal AS builder
 ENV DEBIAN_FRONTEND=noninteractive
@@ -10,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/g1_slam_ws
 # One layer per package, most stable first (FAST_LIO_G1 last: it is the one being updated): a change in one package rebuilds only that package
-# and the ones after it (lidar_localization_ros2 alone takes ~40 min under QEMU). ccache in a BuildKit cache mount
+# and the ones after it. ccache in a BuildKit cache mount
 # keeps object files across builds, so even a rebuilt package recompiles only the files that changed.
 # Legacy (non-BuildKit) builders: real_robot/scripts/g1.sh strips the cache mounts.
 # Robot defaults; the laptop's arm64 (QEMU) build raises MAKE_JOBS.
@@ -21,12 +22,6 @@ ARG COLCON="colcon build --merge-install --cmake-args -DCMAKE_BUILD_TYPE=Release
     -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache --packages-select"
 COPY src/livox_ros_driver2 src/livox_ros_driver2
 RUN --mount=type=cache,target=/ccache . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j${MAKE_JOBS} ${COLCON} livox_ros_driver2
-COPY src/ndt_omp_ros2 src/ndt_omp_ros2
-RUN --mount=type=cache,target=/ccache . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j${MAKE_JOBS} ${COLCON} ndt_omp_ros2
-COPY src/lidar_localization_ros2 src/lidar_localization_ros2
-RUN --mount=type=cache,target=/ccache . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j${MAKE_JOBS} ${COLCON} lidar_localization_ros2
-COPY src/g1_sensor_restamp src/g1_sensor_restamp
-RUN --mount=type=cache,target=/ccache . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j${MAKE_JOBS} ${COLCON} g1_sensor_restamp
 COPY src/fast_lio src/fast_lio
 RUN --mount=type=cache,target=/ccache . /opt/ros/foxy/setup.sh && MAKEFLAGS=-j${MAKE_JOBS} ${COLCON} fast_lio
 
@@ -37,7 +32,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 libpcl-common1.10 libpcl-features1.10 libpcl-filters1.10 libpcl-io1.10 libpcl-kdtree1.10 \
     libpcl-ml1.10 libpcl-octree1.10 libpcl-registration1.10 libpcl-sample-consensus1.10 libpcl-search1.10 \
-    libpcl-segmentation1.10 libpcl-visualization1.10 python3-numpy python3-yaml \
+    libpcl-segmentation1.10 libpcl-visualization1.10 python3-numpy python3-scipy python3-yaml \
     ros-foxy-diagnostic-msgs ros-foxy-lifecycle-msgs ros-foxy-rclcpp-lifecycle ros-foxy-rmw-cyclonedds-cpp \
     ros-foxy-std-srvs ros-foxy-tf2-eigen ros-foxy-tf2-geometry-msgs ros-foxy-tf2-ros ros-foxy-tf2-sensor-msgs \
     && rm -rf /var/lib/apt/lists/*

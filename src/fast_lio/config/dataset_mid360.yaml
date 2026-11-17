@@ -1,67 +1,64 @@
-# Baseline config for the check datasets (TIERS IndoorOffice1, HR2-KILO long_corridor), replayed in
-# lockstep by robot/tools/replay_lockstep.py. The lidar is converted to the G1 vendor layout, so it
-# goes through the same reader as the robot (lidar_type 2).
-# Algorithm parameters: the chosen voxel-map configuration (2026-10-21, results/mac/voxel2_study), indoor
-# settings; outdoor: load outdoor.yaml after this file. The stock FAST-LIO baseline is map_type ikdtree with
-# filter_size_surf 0.5, scan_patch.min_points 0, point_keep_ratio 0.33 and acc_cov 0.1 (reference runs:
-# results/mac/ref_b152101_sync). Dataset-specific lines are marked [DS].
+# Offline evaluation on recorded Mid-360 datasets: fastlio_mapping --replay, or a ROS 2 player publishing
+# /replay/lidar and /replay/imu. The replays carry the lidar as PointCloud2 with a per-point `time` [ns]
+# after the header stamp. Parameters are documented in mid360.yaml; [DS] marks the evaluation's own lines.
+# FAST-LIO's own configuration, as a baseline: map_type ikdtree, filter_size_surf 0.5,
+# scan_patch.min_points 0, point_keep_ratio 0.33, acc_cov 0.1 and acc_range 0.
 /**:
     ros__parameters:
-        # max_iteration N allows up to N+1 iterated updates per scan. Map neighbours are searched again
-        # after an update converges (all |dx| < 0.001), or before the last update if none has; the loop
-        # stops after the second converged update.
         max_iteration: 3
-        # num_threads: 3               # OpenMP threads of the matching loop (default by core count: 3 with > 4 cores)
-        filter_size_surf: 0.35           # scan voxel [m] (outdoor 0.5)
-        filter_size_map: 0.5             # ikd-Tree map only
-        map_type: "voxel"                # voxel map (include/voxel_map.h); "ikdtree": the stock FAST-LIO map
-        voxel_map:
-            size: 0.35                   # map voxel edge [m] (outdoor 0.5)
-            stored_points: 10            # points kept per voxel; from this many on it has a distribution
-            max_points: 30               # the voxel freezes at this count (0: never)
-            merge_angle_deg: 0.0         # coplanar merging off (5.0 / 0.02: better on JEPLO, worse on the G1 walk)
-            merge_distance: 0.02
-            min_points: 20               # plane test for merging: points, std. deviation across [m], and
-            max_thickness: 0.03          #   smallest/middle eigenvalue ratio (rejects lines)
-            planarity: 0.05
-        scan_patch:
-            min_points: 5                # a scan voxel with >= 5 points is one measurement: centroid + covariance
+        map_type: "voxel"
+        filter_size_surf: 0.35
+        filter_size_map: 0.5
         cube_side_length: 1000.0
-        runtime_pos_log_enable: true     # [DS] per-scan timing printout and Log/ files
+        voxel_map:
+            size: 0.35
+            point_sigma: 0.02
+            shape_ratio: 1.0
+            min_n_eff: 6.0
+            freeze_sigma: 0.004
+            pooled_thickness: 0.1
+            pooled_planarity: 0.2
+        scan_patch:
+            min_points: 5
+            sigma_floor: 0.02
+            planar_ratio: 0.1
+        runtime_pos_log_enable: true     # [DS]
+        map_save: false                  # [DS]
         map_file_path: ""                # [DS]
 
         common:
             lid_topic:  "/replay/lidar"  # [DS]
             imu_topic:  "/replay/imu"    # [DS]
-            time_offset_lidar_to_imu: 0.0
             lidar_reliable: true         # [DS] no scans lost in transport, so runs are repeatable
+            time_offset_lidar_to_imu: 0.0
+
+        imu_restamp:
+            enable: true                 # [DS] as on the G1; TIERS indoor has host stamps that stall
 
         preprocess:
-            lidar_type: 2                # [DS] PointCloud2, vendor layout: per-point `time` (float32 ns after the
-                                         # header stamp; default time_field "time", time_absolute false)
+            lidar_type: 2                # [DS]
             scan_line: 4
             blind: 0.5
-            point_keep_ratio: 0.5        # share of the points beyond blind kept (random, no fixed pattern)
-            timestamp_unit: 3            # [DS] ns
+            point_keep_ratio: 0.5
+            timestamp_unit: 3            # [DS]
 
         mapping:
-            map_insert_rule: "closest_to_centre"  # or "first_point" (no voxel-grid bias)
-            acc_cov: 0.3                 # 0.1 slips in the walking-G1 corridor (results/mac/imu_study)
+            acc_cov: 0.3
             gyr_cov: 0.1
             b_acc_cov: 0.0001
             b_gyr_cov: 0.0001
+            acc_range: 4.0
+            acc_satu_cov: 30.0
+            imu_init_time: 0.0           # [DS] one scan's IMU samples: most datasets move right away
             det_range: 100.0
-            extrinsic_est_en: false      # [DS] both datasets: stock Livox driver, factory calibration
+            extrinsic_est_en: false      # [DS] factory calibration
             extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
             extrinsic_R: [ 1., 0., 0.,
                            0., 1., 0.,
                            0., 0., 1.]
 
-        publish:
+        publish:                         # odometry: the defaults (/Odometry, imu frame, once per scan)
             path_en: true
             scan_publish_en: true
             dense_publish_en: false
             scan_bodyframe_pub_en: false # [DS]
-
-        pcd_save:
-            pcd_save_en: false           # [DS]

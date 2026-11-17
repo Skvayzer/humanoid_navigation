@@ -1,8 +1,8 @@
 #pragma once
-// Offline evaluation: feeds a .g1replay dataset (scripts/make_replay.py) straight into FAST_LIO's
-// callbacks and processing step, without DDS or the 100 Hz timer, and writes the odometry as TUM.
-// Messages, their order and the output files match robot/tools/replay_lockstep.py, so both give the
-// same trajectory; this one only skips the transport and the waiting.
+// Offline evaluation: feeds a .g1replay dataset straight into FAST_LIO's callbacks and processing step,
+// without DDS, and writes the odometry as TUM. A scan goes in once the IMU has passed its end, as a driver
+// publishes it, so the result equals a live run that drops nothing. The datasets are made from rosbags by
+// scripts/make_replay.py: a header (JSON metadata), then IMU samples and zlib-compressed scans in stamp order.
 #include <zlib.h>
 #include <chrono>
 #include <condition_variable>

@@ -3,7 +3,8 @@
   <name>fast_lio</name>
   <version>0.0.0</version>
   <description>
-    FAST-LIO2 (hku-mars, branch ROS2) adapted for the Unitree G1 with a Livox Mid-360 on ROS 2 Foxy.
+    Lidar-inertial odometry based on FAST-LIO2 (hku-mars, branch ROS2): voxel map, IMU-rate odometry,
+    outputs for navigation stacks. Configs for the Livox Mid-360, including the Unitree G1.
   </description>
   <maintainer email="vor.roman.v@gmail.com">Roman Voronov</maintainer>
   <license>GPL-2.0</license>
@@ -15,7 +16,6 @@
   <depend>nav_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
-  <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
   <depend>livox_ros_driver2</depend>
 

@@ -1,72 +1,94 @@
-# Unitree G1, Mid-360 in the head, read from the vendor's ROS 2 stream.
-# Mapping: the voxel-map configuration (results/mac/voxel2_study), indoor; outdoor: launch with
-# outdoor:=true (loads outdoor.yaml after this file). G1-specific lines are marked [G1].
+# Unitree G1: Livox Mid-360 upside down in the head, read from the vendor's ROS 2 stream, whose IMU stamps are
+# rebuilt by imu_restamp. Parameters are documented in mid360.yaml; [G1] marks this robot's own lines.
+# Outdoors: ros2 launch fast_lio mapping.launch.py outdoor:=true.
 /**:
     ros__parameters:
-        feature_extract_enable: false
         max_iteration: 3
-        filter_size_surf: 0.35           # scan voxel [m] (outdoor 0.5)
-        filter_size_map: 0.5             # ikd-Tree map only
-        map_type: "voxel"                # voxel map (include/voxel_map.h); "ikdtree": the stock FAST-LIO map
-        voxel_map:
-            size: 0.35                   # map voxel edge [m] (outdoor 0.5)
-            stored_points: 10            # points kept per voxel; from this many on it has a distribution
-            max_points: 30               # the voxel freezes at this count (0: never)
-            merge_angle_deg: 0.0         # coplanar merging off: worse on the G1 walk (results/mac/voxel2_study)
-            merge_distance: 0.02
-            min_points: 20               # plane test for merging: points, std. deviation across [m], and
-            max_thickness: 0.03          #   smallest/middle eigenvalue ratio (rejects lines)
-            planarity: 0.05
-        scan_patch:
-            min_points: 5                # a scan voxel with >= 5 points is one measurement: centroid + covariance
+        map_type: "voxel"
+        filter_size_surf: 0.35
+        filter_size_map: 0.5
         cube_side_length: 1000.0
-        runtime_pos_log_enable: true     # [G1] per-scan timing printout (and Log/ files) for the first runs
-        map_file_path: ""                # [G1]
+        voxel_map:
+            size: 0.35
+            point_sigma: 0.02
+            shape_ratio: 1.0
+            min_n_eff: 6.0
+            freeze_sigma: 0.004
+            pooled_thickness: 0.1
+            pooled_planarity: 0.2
+            free_space:                  # [G1] removal of what moved (the operator and people near the robot), in SLAM and
+                enable: true             #   in localization's live layer (the saved map is never changed);
+                min_range: 0.5           # [G1] rays start outside the head shell and the self-hits (up to ~0.3 m)
+        scan_patch:
+            min_points: 5
+            sigma_floor: 0.02
+            planar_ratio: 0.1
+        runtime_pos_log_enable: true     # [G1] timing printout and log while the robot setup is validated
+        map_save: false                  # [G1] write the map when the node stops (robot scripts/slam.sh: at Ctrl-C)
+        map_file_path: "~/workspace/romanvoronov/maps/map"   # [G1] the robot's maps/ folder (map.vmap); ~ = $HOME
 
         common:
-            lid_topic:  "/utlidar/cloud_livox_mid360"   # [G1] vendor stream, Velodyne-style PointCloud2
-            imu_topic:  "/g1/imu"                       # [G1] restamped by g1_sensor_restamp; raw: /utlidar/imu_livox_mid360
-            time_sync_en: false
+            lid_topic:  "/utlidar/cloud_livox_mid360"   # [G1] vendor stream: PointCloud2, per-point `time` [ns]
+            imu_topic:  "/utlidar/imu_livox_mid360"     # [G1] vendor IMU, 200 Hz, acceleration in g
+            lidar_reliable: true         # [G1] best effort loses a scan with any of its UDP fragments; the
+                                         # vendor publishes keep-last 1, so a slow reader cannot block it
             time_offset_lidar_to_imu: 0.0
 
+        imu_restamp:
+            enable: true                 # [G1] the vendor stamps stall up to ~14 ms at every scan and then catch
+                                         # up in a burst; ~7 % of the samples repeat the previous one
+
         preprocess:
-            lidar_type: 2                # [G1] PointCloud2 with per-point `time` (float32) and `ring` (uint16)
+            lidar_type: 2                # [G1] PointCloud2 with a per-point `time` (float32) and `ring`
             scan_line: 4
-            blind: 0.5
-            point_keep_ratio: 0.5        # share of the points beyond blind kept (random, no fixed pattern)
+            blind: 0.3                   # [G1] the robot's body stays inside it or out of the field of view
+            point_keep_ratio: 0.5
             timestamp_unit: 3            # [G1] `time` is in ns
-            scan_rate: 10
 
         mapping:
-            # [G1] Process noise for walking, chosen on the G1 sequences (HR2-KILO, our walk;
-            # results/mac/imu_study): acc_cov 0.1 slips in the long corridor, and the values measured
-            # on the standing robot (10 min static /g1/imu, results/imu_restamp/2026-10-20_long:
-            # acc 2.4e-2 z, gyr 3.9e-6 x, bias walks 4.8e-5 / 3.4e-6, incl. the ~28 Hz fan vibration)
-            # are worse on turns and the short corridor: walking and turning are much noisier.
-            acc_cov: 0.3                 # [G1]
+            acc_cov: 0.3                 # [G1] walking and turning: far noisier than the standing robot
             gyr_cov: 0.1
             b_acc_cov: 0.0001
             b_gyr_cov: 0.0001
-            fov_degree: 360.0
+            acc_range: 4.0
+            acc_satu_cov: 30.0
+            imu_init_time: 3.0           # [G1] stand still for 3 s at the start
             det_range: 100.0
-            extrinsic_est_en: false      # [G1] keep the calibration fixed
+            extrinsic_est_en: false      # [G1] fixed calibration
             extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
-            # [G1] Verified 2026-10-20 with tools/sensor_check.py on the robot: the vendor cloud and IMU
-            # are both in the sensor's native (upside-down) frame, so the rotation is identity
-            # (floor found 1.22 m below the sensor). Not the friend's diag(1,-1,-1): that was for
-            # a different driver (/livox/lidar), which rolls the cloud but not the IMU.
+            # [G1] The vendor cloud and IMU are both in the sensor's own (upside-down) frame: identity.
             extrinsic_R: [ 1., 0., 0.,
                            0., 1., 0.,
                            0., 0., 1.]
 
+        frames:
+            map: "map"
+            init: "init"
+            odom: "odom"
+            imu: "imu"
+            lidar: "lidar"
+            lidar_level: "sensor"        # [G1] the navigation stack's body frame
+
         publish:
+            odometry_topic: "/state_estimation"         # [G1] the navigation stack's inputs: the level lidar
+            odometry_frame: "lidar_level"               # [G1]   frame's odometry at IMU rate,
+            odometry_parent: "map"                      # [G1]   published in the map frame (SLAM: map = init;
+                                                        #   localization: only once localized)
+            odometry_imu_every: 1                       # [G1]
+            publish_tf: true
             path_en: true
-            effect_map_en: false
-            map_en: false                # [G1] upstream accumulates /Laser_map forever and republishes it every second
             scan_publish_en: true
             dense_publish_en: false
-            scan_bodyframe_pub_en: false # [G1] unused
+            scan_bodyframe_pub_en: false # [G1]
+            publish_registered_cloud: true              # [G1]   and the registered scan
+            registered_cloud_topic: "/registered_scan"  # [G1]
+            publish_map: true
+            map_topic: "/Laser_map"
+            map_period: 1.0
+            map_point_step: 0.05
 
-        pcd_save:
-            pcd_save_en: false           # [G1] upstream's save only works with map_en
-            interval: -1
+        # [G1] SLAM unless a map is given. Mapping session: SLAM, then the map built offline from the recording;
+        localization:
+            map_file: ""
+            search_z: 0.0                # [G1] use estimated ground, and do not search the floor.
+                                         # The upside-down sensor 1.22 m up sees the floor ~1 m from the feet

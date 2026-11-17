@@ -148,12 +148,17 @@ case "${1:-status}" in
       --mount "type=bind,src=$repo/real_robot/demo/ar_demo.py,dst=/opt/demo/ar_demo.py,readonly=true" \
       --mount "type=bind,src=$workspace/runtime/demo,dst=/data/demo" g1-rr-demo:latest --out /data/demo "${@:3}" >/dev/null
     sleep 4; sudo docker logs --tail 3 "$dm" 2>&1 ;;
-  static-esdf)      # static ESDF layer of a saved map: runtime/slam/maps/<name>_esdf.npz (for up --map <name>)
+  static-esdf)      # after g1.sh slam mapping <name>: the map's floor frame (<name>_floor.json, for localize) and its static
+                    # ESDF layer (<name>_esdf.npz, for up --map <name>)
     name="${2:?map name in runtime/slam/maps}"; shift 2
-    maps="$runtime/slam/maps"; [[ -r "$maps/$name.pcd" ]] || { echo "no $maps/$name.pcd" >&2; exit 2; }
-    path=(); [[ -r "$maps/${name}_path.csv" ]] && path=(--path "/data/maps/${name}_path.csv")
+    maps="$runtime/slam/maps"
+    for f in "$name.vmap" "${name}_raw.pcd" "${name}_path.csv" "${name}_info.json"; do
+      [[ -r "$maps/$f" ]] || { echo "no $maps/$f (record the map with g1.sh slam mapping $name)" >&2; exit 2; }; done
+    sudo docker run --rm "${common[@]}" --memory 2g --mount "type=bind,src=$maps,dst=/data/maps" \
+      --entrypoint python3 "$slam_image" /opt/real_robot/slam/map_floor.py /data/maps "$name"
     sudo docker run --rm "${common[@]}" --memory 4g --mount "type=bind,src=$maps,dst=/data/maps" \
-      --entrypoint python3 -w /opt/wb "$wb_image" -m g1_wholebody.esdf_layers "/data/maps/$name.pcd" "/data/maps/${name}_esdf.npz" "${path[@]}" "$@" ;;
+      --entrypoint python3 -w /opt/wb "$wb_image" -m g1_wholebody.esdf_layers "/data/maps/${name}_static.pcd" \
+      "/data/maps/${name}_esdf.npz" --path "/data/maps/${name}_static_path.csv" "$@" ;;
   up)               # the whole stack once (SLAM odom, executor active in IDLE, Foxglove bridge, motor log); then the remote drives it
     shift
     printf '%s\n' "$@" | grep -q -- '--geofence' || { echo "up needs --geofence XMIN XMAX YMIN YMAX (real free floor round the start mark)" >&2; exit 2; }

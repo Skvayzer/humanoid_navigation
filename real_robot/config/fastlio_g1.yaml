@@ -1,74 +1,98 @@
-# real_robot/config/fastlio_g1.yaml: FAST_LIO_G1's g1_mid360.yaml (f194a59) for the whole-body pipeline.
-# Changed from it: [RR] lines. Unchanged: every estimator parameter of the colleague's config.
-# Unitree G1, Mid-360 in the head, read from the vendor's ROS 2 stream.
-# Mapping: the voxel-map configuration (results/mac/voxel2_study), indoor; outdoor: launch with
-# outdoor:=true (loads outdoor.yaml after this file). G1-specific lines are marked [G1].
+# real_robot/config/fastlio_g1.yaml: FAST_LIO_G1's config/g1_mid360.yaml (src/fast_lio, see UPSTREAM_REVISION) with this
+# pipeline's frames and topics ([RR]); every other value is the G1 config's. Parameters: src/fast_lio/config/mid360.yaml.
+#
+# TF:  map ─(floor_anchor.py)→ slam_map ─→ slam_init ─→ camera_init ─→ body
+#        floor frame, z = 0     FAST-LIO   "map"      "init"     "odom"        "imu"
+# The executor, cloud_relay, map_builder and the demo keep using camera_init -> body (/g1_slam/odometry) and
+# map -> camera_init, as with the previous FAST-LIO. slam_map -> slam_init: identity in SLAM; in localization the
+# pose of slam_init on the saved .vmap, published at the first localization (until then nothing reaches map).
+# slam_init -> camera_init: relocalizations and jumps (identity until the first), so camera_init -> body stays continuous.
 /**:
     ros__parameters:
-        feature_extract_enable: false
         max_iteration: 3
-        filter_size_surf: 0.35           # scan voxel [m] (outdoor 0.5)
-        filter_size_map: 0.5             # ikd-Tree map only
-        map_type: "voxel"                # voxel map (include/voxel_map.h); "ikdtree": the stock FAST-LIO map
-        voxel_map:
-            size: 0.35                   # map voxel edge [m] (outdoor 0.5)
-            stored_points: 10            # points kept per voxel; from this many on it has a distribution
-            max_points: 30               # the voxel freezes at this count (0: never)
-            merge_angle_deg: 0.0         # coplanar merging off: worse on the G1 walk (results/mac/voxel2_study)
-            merge_distance: 0.02
-            min_points: 20               # plane test for merging: points, std. deviation across [m], and
-            max_thickness: 0.03          #   smallest/middle eigenvalue ratio (rejects lines)
-            planarity: 0.05
-        scan_patch:
-            min_points: 5                # a scan voxel with >= 5 points is one measurement: centroid + covariance
+        map_type: "voxel"
+        filter_size_surf: 0.35
+        filter_size_map: 0.5
         cube_side_length: 1000.0
+        voxel_map:
+            size: 0.35
+            point_sigma: 0.02
+            shape_ratio: 1.0
+            min_n_eff: 6.0
+            freeze_sigma: 0.004
+            pooled_thickness: 0.1
+            pooled_planarity: 0.2
+            free_space:                  # [G1] removal of what moved (the operator and people near the robot)
+                enable: true
+                min_range: 0.5
+        scan_patch:
+            min_points: 5
+            sigma_floor: 0.02
+            planar_ratio: 0.1
         runtime_pos_log_enable: false    # [RR] no per-scan log files on the robot
-        map_file_path: ""                # [G1]
+        map_save: false                  # [RR] run_slam.sh mapping <name> sets it and map_file_path=/data/maps/<name>
+        map_file_path: ""
 
         common:
-            lid_topic:  "/utlidar/cloud_livox_mid360"   # [G1] vendor stream, Velodyne-style PointCloud2
-            imu_topic:  "/g1/imu"                       # [G1] restamped by g1_sensor_restamp; raw: /utlidar/imu_livox_mid360
-            time_sync_en: false
+            lid_topic:  "/utlidar/cloud_livox_mid360"
+            imu_topic:  "/utlidar/imu_livox_mid360"
+            lidar_reliable: true
             time_offset_lidar_to_imu: 0.0
 
+        imu_restamp:
+            enable: true                 # [G1] replaces g1_sensor_restamp
+
         preprocess:
-            lidar_type: 2                # [G1] PointCloud2 with per-point `time` (float32) and `ring` (uint16)
+            lidar_type: 2
             scan_line: 4
-            blind: 0.5
-            point_keep_ratio: 0.5        # share of the points beyond blind kept (random, no fixed pattern)
-            timestamp_unit: 3            # [G1] `time` is in ns
-            scan_rate: 10
+            blind: 0.3
+            point_keep_ratio: 0.5
+            timestamp_unit: 3
 
         mapping:
-            # [G1] Process noise for walking, chosen on the G1 sequences (HR2-KILO, our walk;
-            # results/mac/imu_study): acc_cov 0.1 slips in the long corridor, and the values measured
-            # on the standing robot (10 min static /g1/imu, results/imu_restamp/2026-10-20_long:
-            # acc 2.4e-2 z, gyr 3.9e-6 x, bias walks 4.8e-5 / 3.4e-6, incl. the ~28 Hz fan vibration)
-            # are worse on turns and the short corridor: walking and turning are much noisier.
-            acc_cov: 0.3                 # [G1]
+            acc_cov: 0.3
             gyr_cov: 0.1
             b_acc_cov: 0.0001
             b_gyr_cov: 0.0001
-            fov_degree: 360.0
+            acc_range: 4.0
+            acc_satu_cov: 30.0
+            imu_init_time: 3.0           # stand still for 3 s at the start
             det_range: 100.0
-            extrinsic_est_en: false      # [G1] keep the calibration fixed
+            extrinsic_est_en: false
             extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
-            # [G1] Verified 2026-10-20 with tools/sensor_check.py on the robot: the vendor cloud and IMU
-            # are both in the sensor's native (upside-down) frame, so the rotation is identity
-            # (floor found 1.22 m below the sensor). Not the friend's diag(1,-1,-1): that was for
-            # a different driver (/livox/lidar), which rolls the cloud but not the IMU.
             extrinsic_R: [ 1., 0., 0.,
                            0., 1., 0.,
                            0., 0., 1.]
 
-        publish:
-            path_en: true
-            effect_map_en: false
-            map_en: false                # [G1] upstream accumulates /Laser_map forever and republishes it every second
-            scan_publish_en: true
-            dense_publish_en: true       # [RR] full deskewed scan on /cloud_registered (only computed while subscribed: map_builder)
-            scan_bodyframe_pub_en: true  # [RR] NDT localisation input (only computed while subscribed)
+        frames:                          # [RR] see the TF tree above
+            map: "slam_map"
+            init: "slam_init"
+            odom: "camera_init"
+            imu: "body"
+            lidar: "g1_mid360"
+            lidar_level: "g1_mid360_level"
 
-        pcd_save:
-            pcd_save_en: false           # [G1] upstream's save only works with map_en
-            interval: -1
+        publish:
+            odometry_topic: "/g1_slam/odometry"         # [RR] camera_init -> body, as before
+            odometry_frame: "imu"
+            odometry_parent: "odom"
+            odometry_imu_every: 4                       # [RR] 50 Hz (every 4th IMU sample; was 10 Hz per scan)
+            publish_tf: true
+            path_en: true
+            scan_publish_en: false
+            dense_publish_en: false
+            scan_bodyframe_pub_en: false
+            publish_registered_cloud: true              # [RR] the full deskewed scan in camera_init: cloud_relay,
+            registered_cloud_topic: "/g1_slam/cloud_registered"   #   map_builder, floor anchor (as dense_publish_en was)
+            publish_map: true
+            map_topic: "/g1_slam/lio_map"               # [RR] only while subscribed
+            map_period: 1.0
+            map_point_step: 0.05
+
+        localization:                    # [RR] run_slam.sh localize <name> sets map_file=/data/maps/<name>.vmap
+            map_file: ""
+            initial_pose_topic: "/initialpose"         # geometry_msgs/PoseWithCovarianceStamped in slam_map (x, y, yaw
+                                                       #   = map's up to the floor tilt): Foxglove's pose estimate tool
+            status_topic: "/g1_slam/localization_status"
+            map_topic: "/g1_slam/prior_map"
+            search_z: 0.0

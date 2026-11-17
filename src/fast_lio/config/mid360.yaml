@@ -1,61 +1,187 @@
+# Livox Mid-360 with livox_ros_driver2 (CustomMsg). The reference for all parameters: a robot config
+# (e.g. g1_mid360.yaml) changes the inputs, the noise and the outputs. Outdoors: load outdoor.yaml after
+# this file (larger voxels).
 /**:
     ros__parameters:
-        # max_iteration N allows up to N+1 iterated updates per scan. Map neighbours are searched again
-        # after an update converges (all |dx| < 0.001), or before the last update if none has; the loop
-        # stops after the second converged update.
+        # Iterated update: up to max_iteration + 1 iterations per scan. Map neighbours are searched again
+        # after an update converges (|dx| < 0.001 m / rad on position and rotation), or before the last one.
         max_iteration: 3
-        # num_threads: 3               # OpenMP threads of the matching loop (default by core count: 3 with > 4 cores)
-        # Voxel-map configuration (results/mac/voxel2_study), indoor; outdoor: load outdoor.yaml after this file.
-        filter_size_surf: 0.35           # scan voxel [m] (outdoor 0.5)
-        filter_size_map: 0.5             # ikd-Tree map only
-        map_type: "voxel"                # voxel map (include/voxel_map.h); "ikdtree": the stock FAST-LIO map
-        voxel_map:
-            size: 0.35                   # map voxel edge [m] (outdoor 0.5)
-            stored_points: 10            # points kept per voxel; from this many on it has a distribution
-            max_points: 30               # the voxel freezes at this count (0: never)
-            merge_angle_deg: 0.0         # coplanar merging off (5.0 / 0.02: better on JEPLO, worse on the G1 walk)
-            merge_distance: 0.02
-            min_points: 20               # plane test for merging: points, std. deviation across [m], and
-            max_thickness: 0.03          #   smallest/middle eigenvalue ratio (rejects lines)
-            planarity: 0.05
+        # num_threads: 3               # OpenMP threads of the matching loop (default by core count)
+        map_type: "voxel"                # "voxel" (include/voxel_map.h) or "ikdtree" (FAST-LIO's point map)
+        filter_size_surf: 0.35           # scan downsampling voxel [m]
+        filter_size_map: 0.5             # map_type ikdtree: map voxel [m]
+        cube_side_length: 1000.0         # map_type ikdtree: local map box [m]
+        voxel_map:                       # nothing here depends on a number of points: a sparser or denser scan
+                                         # changes the accuracy, not the behaviour
+            size: 0.35                   # voxel edge [m]
+            point_sigma: 0.02            # noise of a point [m], at any range (the sensor's precision). A point at range
+                                         #   r >= 1 m weighs 1/r^2 in a voxel's average (near observations preferred:
+                                         #   smaller grazing-angle offsets); the average is as precise as
+                                         #   point_sigma / sqrt(n_eff), n_eff = (sum w)^2 / sum w^2 the effective
+                                         #   number of points. A voxel's distribution is the spread of its points plus
+                                         #   the uncertainty of their mean, point_sigma^2 / n_eff.
+            shape_ratio: 1.0             # a voxel is matched on its own once the spread of its points exceeds this ratio
+                                         #   of the uncertainty of their mean; until then the surface comes from the
+                                         #   pooled statistics of the 27 voxels around the point (a coarser patch, as
+                                         #   FAST-LIO's neighbourhood plane fit, without stored points). 0: always own
+            min_n_eff: 6.0               # ... and once its effective number of points reaches this: a covariance of
+                                         #   fewer points has the shape of the sample (2 points a line, 3 a plane)
+            freeze_sigma: 0.004          # a voxel takes no more points once its position is known to this [m], i.e.
+                                         #   n_eff >= (point_sigma / freeze_sigma)^2 (25 with the defaults); 0: never
+            pooled_thickness: 0.1        # a pooled neighbourhood counts as one surface if its points scatter no more than
+            pooled_planarity: 0.2        #   this [m] about their plane and at most this ratio of its smaller extent
+                                         #   (FAST-LIO's neighbourhood fit accepts a 10 cm band)
+            free_space:                  # removal of what moved (people): rays from the sensor to a share of the points of each
+                                         #   scan; a ray that passes through a voxel's distribution and ends past it saw
+                                         #   through it, a scan point that fits it confirms it
+                enable: true
+                ray_share: 0.15          # rays per scan: this share of its points (a random subset; 0.15 of a thinned
+                                         #   Mid-360 scan is ~1000); cost about linear in it, walked on num_threads threads
+                min_range: 0.5           # a ray starts this far from the sensor [m] (the robot itself)
+                max_range: 8.0           # ... and is followed this far [m]: farther, angular errors and the beam width
+                                         #   make "through" and "beside" indistinguishable
+                ray_sigma: 0.03          # noise of a ray's end point and of a scan point [m], in `beyond` and `confirm`
+                core: 2.0                # a ray passes through a distribution within this Mahalanobis distance of its mean
+                beyond: 3.0              # ... and ends past it: beyond its surface by this many sigma across it (planar
+                                         #   voxels, or on their neighbourhood's plane), else this far (Mahalanobis)
+                confirm: 3.0             # a scan point within this Mahalanobis distance confirms a suspected voxel
+                remove_after: 5          # a voxel is removed after this many scans in a row that see through it without
+                                         #   a confirming point
+                subdivision: 4           # free space in cells, this many per voxel edge (4: 8.75 cm; 1: the voxel itself;
+                                         #   0: none): a point that falls in a free cell is kept out of the map
+                cell_free_after: 7       # per scan a cell is hit (a point in it) or missed (a ray crosses it, none of its
+                cell_free_after_max: 20  #   points in it); a never-observed cell is free after cell_free_after misses, a
+                cell_reoccupy_after: 5   #   long-occupied one after cell_free_after_max; a long-free cell is occupied again
+                cell_hit_weight: 9       #   after cell_reoccupy_after hits (0.5 s); a hit outweighs cell_hit_weight misses
+                margin: 0.2              # rays mark cells free up to this short of their end point [m]
+                graze_k: 3.0             # grazing rays: a ray stops marking cells free where it enters the +-graze_k sigma
+                band_k: 2.0              #   band of the surface it ends on; no cell within +-band_k sigma of its own
+                                         #   voxel's plane is marked free
         scan_patch:
-            min_points: 5                # a scan voxel with >= 5 points is one measurement: centroid + covariance
-        cube_side_length: 1000.0
-        runtime_pos_log_enable: false
-        map_file_path: "./test.pcd"
+            min_points: 5                # a scan voxel with >= min_points points is one measurement (centroid +
+                                         # covariance), sparser voxels keep their points: the covariance of fewer points
+                                         # has the shape of the sample, not of the surface (with 1, a sparse scan loses
+                                         # its robustness)
+            sigma_floor: 0.02            # no measurement is trusted beyond this [m] (systematic errors)
+            planar_ratio: 0.1            # a matched map distribution whose smallest eigenvalue is below this ratio of
+                                         # the middle one is a plane: one residual row along its normal instead of
+                                         # three, against the fitted plane (its variance: the plane's uncertainty, the
+                                         # measurement's noise and the normal's uncertainty times the lever arm). The
+                                         # in-plane rows of a plane only say where the voxel grid cut it; in a corridor
+                                         # they add up to false information along the axis (the estimate slides).
+                                         # 0: always three rows
+        runtime_pos_log_enable: false    # per-scan timing printout, and a CSV log at exit (runtime_pos_log_path;
+                                         # default: fast_lio_time_log.csv in the working directory)
+        map_save: false                  # write the map when the node stops, after leaving ROS (in localization mode the live layer)
+        map_file_path: "./map"           # to this file; its extension follows map_type: .vmap (the voxel map) or
+                                         #   .pcd (the ikd-Tree's points). Localization mode never overwrites:
+                                         #   <name>_local_map_<n>.vmap
 
         common:
             lid_topic:  "/livox/lidar"
             imu_topic:  "/livox/imu"
-            time_offset_lidar_to_imu: 0.0 # Time offset between lidar and IMU calibrated by other algorithms, e.g. LI-Init (can be found in README).
+            lidar_reliable: false        # reliable lidar subscription (large PointCloud2 scans over lossy links)
+            time_offset_lidar_to_imu: 0.0  # [s], e.g. calibrated by LI-Init
+
+        imu_restamp:                     # IMU stamps rebuilt on the sensor's own sample grid, for drivers that
+                                         # stamp each sample with host time on receipt (include/imu_restamper.h)
+            enable: false
+            period: 0.005                # [s] nominal sample period
+            creep: 1.0e-6                # [s per sample] must exceed how much slower than `period` the sensor
+                                         # runs: `lost` growing steadily on a clean input means it is too small
+            max_gap: 0.1                 # [s] a larger stamp jump (outage, clock step) restarts the grid
+            drop_duplicates: true        # drop a sample whose six axes repeat the previous one
 
         preprocess:
             lidar_type: 1                # 1: livox_ros_driver2 CustomMsg; 2: PointCloud2 with a per-point time field
                                          # (time_field, timestamp_unit, time_absolute; e.g. livox_ros_driver2
                                          # PointCloud2: time_field "timestamp", unit 3, time_absolute true)
-            scan_line:  4
-            blind: 0.5
-            point_keep_ratio: 0.5        # share of the points beyond blind kept (random, no fixed pattern)
-            timestamp_unit: 3
+            scan_line: 4                 # CustomMsg: lines >= scan_line are dropped
+            blind: 0.5                   # points closer than this [m] are dropped (sensor housing, no-returns)
+            point_keep_ratio: 0.5        # share of the remaining points kept (random, reproducible per scan)
+            timestamp_unit: 3            # PointCloud2 time unit: 0 s, 1 ms, 2 us, 3 ns
 
         mapping:
-            map_insert_rule: "closest_to_centre"  # or "first_point" (no voxel-grid bias)
-            acc_cov: 0.3                 # 0.1 slips in the walking-G1 corridor (results/mac/imu_study)
-            gyr_cov: 0.1
-            b_acc_cov: 0.0001
+            acc_cov: 0.3                 # IMU noise: accelerometer [(m/s^2)^2], gyroscope [(rad/s)^2] and their
+            gyr_cov: 0.1                 #   bias random walks. A walking robot needs much more than the
+            b_acc_cov: 0.0001            #   datasheet values.
             b_gyr_cov: 0.0001
-            det_range:     100.0
-            extrinsic_est_en:  true      # true: enable the online estimation of IMU-LiDAR extrinsic
-            extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
-            extrinsic_R: [ 1., 0., 0.,
-                            0., 1., 0.,
-                            0., 0., 1.]
+            acc_range: 4.0               # accelerometer range in the IMU's units (Mid-360: 4 g; 0: off): a reading
+            acc_satu_cov: 30.0           #   at it is only a bound and gets this noise instead of acc_cov
+            imu_init_time: 3.0           # gravity and gyro bias averaged over this long [s]: stand still at start
+            init_cov_bg: 0.0001          # initial variances of the gyroscope bias [(rad/s)^2], the accelerometer bias
+            init_cov_ba: 0.001           #   [(m/s^2)^2] and the gravity direction [rad^2] (FAST-LIO's values)
+            init_cov_grav: 0.00001
+            prior_gate: true             # the association and the chi-square gate of a measurement include the prior's
+                                         #   pose covariance mapped to the point (an innovation gate): a poor prior (an
+                                         #   impact, a direction nothing constrains) widens the gate instead of losing
+                                         #   the matches. The residual rows keep the measurement covariance alone
+            blob_if_below: 0.5           # a pooled neighbourhood that is no single surface is still used, as a blob as
+                                         #   wide as the region (a weak constraint), when fewer than this share of the
+                                         #   scan's points match a surface: a lifeline for sparse scenes (roads at a
+                                         #   tenth of the points), not an extra pull elsewhere. 0: never, 1: always
+            det_range: 100.0             # map_type ikdtree: local map radius around the sensor [m]
+            extrinsic_est_en: true       # estimate the lidar-IMU extrinsic online (on a walking robot the estimate
+                                         #   drifts by degrees: keep it off there and calibrate extrinsic_R instead)
+            extrinsic_T: [ -0.011, -0.02329, 0.04412 ]   # lidar position in the IMU frame [m]
+            extrinsic_R: [ 1., 0., 0.,                   # lidar-to-IMU rotation. The Mid-360's internal lidar-IMU
+                           0., 1., 0.,                   #   rotation is off by up to ~0.5 deg per unit; a pitch error
+                           0., 0., 1.]                   #   bends long straight walks: calibrate it (README)
+
+        frames:                          # TF tree: map -> init -> odom -> imu -> lidar, imu -> lidar_level
+            map: "map"                   # map -> init (static): identity in SLAM ("": not published); localization: the
+                                         #   pose of init on the primary map, from the first localization
+            init: "init"                 # the filter's frame: z up (gravity-aligned at the start), origin the IMU at the start
+            odom: "odom"                 # init -> odom: the jumps of the estimate (see jump_distance), identity until the
+                                         #   first; odom -> imu is continuous (the frame for control)
+            imu: "imu"                   # odom -> imu: the filter's pose, with each odometry message
+            lidar: "lidar"               # imu -> lidar: the extrinsic (static)
+            lidar_level: "lidar_level"   # imu -> lidar_level (static, once initialised): the lidar origin with the axes
+                                         #   of init at the end of the initialisation (level while the robot stood),
+                                         #   whatever the mounting: a body frame for navigation and control
 
         publish:
-            path_en: true                # true: publish Path
-            scan_publish_en:  true       # false: close all the point cloud output
-            dense_publish_en: false      # false: low down the points number in a global-frame point clouds scan.
-            scan_bodyframe_pub_en: true  # true: output the point cloud scans in IMU-body-frame
+            odometry_topic: "/Odometry"  # nav_msgs/Odometry: pose and twist (in the child frame), with covariances
+            odometry_frame: "imu"        # its child frame: imu, lidar or lidar_level
+            odometry_parent: "odom"      # its frame, and that of the scans and the trajectory: odom (continuous) or map
+                                         #   (localization: published once localized)
+            odometry_imu_every: 0        # 0: once per scan, the updated pose at the scan end; N: at every N-th IMU sample,
+                                         #   the newest state (a scan's update shows from the next one on)
+            jump_distance: 0.25          # an update moving the pose more than this [m] or jump_angle_deg is a jump: it goes
+            jump_angle_deg: 3.0          #   into init -> odom; so does a relocalization. Normal corrections stay well below
+            publish_tf: true             # the TF tree above
+            path_en: true                # /trajectory
+            scan_publish_en: true        # /cloud_registered
+            dense_publish_en: false      #   all points, not the downsampled ones
+            scan_bodyframe_pub_en: true  # /cloud_registered_body (imu frame)
+            publish_registered_cloud: false         # the full deskewed scan
+            registered_cloud_topic: "/registered_cloud"
+            publish_map: true            # the map (voxel means, or the ikd-Tree's points) in odometry_parent,
+            map_topic: "/Laser_map"      #   only while someone subscribes,
+            map_period: 1.0              #   every this many seconds of scan time (0: every scan);
+            map_point_step: 0.1          # voxel map: points this far apart [m] over each voxel's distribution (0: its
+                                         #   mean), colored by the plane normal (rgb), intensity |n_z|; also /prior_map
 
-        pcd_save:
-            pcd_save_en: true            # map_save service: writes the ikd-Tree map to map_file_path
+        # Localization on a saved map (map_type voxel): the scans are matched against the primary map (a .vmap
+        # written by map_save, never changed) and a live layer for what it lacks (unknown space, new objects).
+        # The filter runs as SLAM until the first localization; a relocalization takes the last submap_scans
+        # scans and searches x, y, yaw (z from the floor, one floor per map): without initial_pose once over the
+        # whole map, as soon as the scans are in; if that fails, or with initial_pose, or for a pose on
+        # initial_pose_topic (map frame, e.g. Foxglove's pose estimate tool), near the guess.
+        localization:
+            map_file: ""                 # the primary map (.vmap); "" = SLAM
+            # initial_pose: [0.0, 0.0, 0.0]   # guess [x, y, yaw_deg] in map; without it the whole map is searched
+            initial_pose_topic: "/initialpose"   # geometry_msgs/PoseWithCovarianceStamped, frame map
+            status_topic: "/localization_status" # std_msgs/String (latched)
+            map_topic: "/prior_map"      # the primary map (latched), for display: points as publish.map_point_step
+            submap_scans: 10             # scans in a relocalization's submap
+            search_xy: 2.0               # search window around the guess [m]
+            search_yaw_deg: 45.0         #   and [deg]
+            search_z: 0.0                # z checked around the floor-based estimate [m]; 0: none. For a sensor that sees
+                                         #   the floor only metres away (upright and high on the robot), e.g. 1.5
+            max_range: 25.0              # submap points used, from the robot [m]; the yaw step: one voxel at this range
+            score_band: [0.2, 2.5]       # heights above the floor of the points scored in the search [m] (floor and
+                                         #   ceiling points fit anywhere): under a low ceiling, lower the top
+            accept_matched: 0.8          # share of the submap points a pose must match to be accepted
+            max_ambiguity: 0.9           # a distinct pose matching this share of the best's matches: ambiguous, refused
+            live_radius: 30.0            # the live layer keeps voxels within this distance of the robot [m]; 0: all

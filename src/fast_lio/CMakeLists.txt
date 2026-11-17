@@ -12,12 +12,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_FLAGS "-O3 -pthread -fexceptions")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# FAST_LIO writes its timing log (runtime_pos_log_enable) to <source>/Log/.
-add_definitions(-DROOT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/\")
-
 # OpenMP threads for the per-point nearest-search/residual loop: the num_threads parameter, whose
-# default is set here by core count. (Upstream enabled OpenMP on x86 only, which left ARM computers such
-# as the G1's Jetson single-threaded.)
+# default is set here by core count (on any architecture).
 include(ProcessorCount)
 ProcessorCount(N)
 if(N GREATER 4)
@@ -42,7 +38,6 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(std_srvs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -61,7 +56,7 @@ if(IKD_SYNC_REBUILD)
   target_compile_definitions(fastlio_mapping PRIVATE Multi_Thread_Rebuild_Point_Num=1000000000)
 endif()
 target_link_libraries(fastlio_mapping ${PCL_LIBRARIES} Eigen3::Eigen)
-# Offline replay (--replay) reads zlib-compressed .g1replay datasets.
+# Offline replay (--replay) reads zlib-compressed .g1replay datasets; without zlib the build has no --replay.
 find_package(ZLIB)
 if(ZLIB_FOUND)
   target_compile_definitions(fastlio_mapping PRIVATE FASTLIO_REPLAY)
@@ -70,7 +65,7 @@ else()
   message(WARNING "zlib not found: fastlio_mapping is built without --replay")
 endif()
 ament_target_dependencies(fastlio_mapping
-  rclcpp geometry_msgs nav_msgs sensor_msgs std_msgs std_srvs tf2_ros livox_ros_driver2)
+  rclcpp geometry_msgs nav_msgs sensor_msgs std_msgs tf2_ros livox_ros_driver2)
 
 install(TARGETS fastlio_mapping DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})

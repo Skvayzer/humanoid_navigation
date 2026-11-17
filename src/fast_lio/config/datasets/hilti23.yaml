@@ -1,0 +1,57 @@
+# FAST_LIO_G1 on Hilti 2023 Site 1 handheld_1-5 and Site 3 handheld_1-4 (Hesai PandarXT-32, Alphasense IMU 400 Hz).
+# Input: PointCloud2 on /replay/lidar with a per-point `time` [ns] after the scan start, IMU on /replay/imu.
+# Parameters not set here are as in config/dataset_mid360.yaml.
+/**:
+    ros__parameters:
+        max_iteration: 3
+        map_type: "voxel"
+        filter_size_surf: 0.4
+        voxel_map:
+            size: 0.35                    # as config/dataset_mid360.yaml
+            point_sigma: 0.02
+            shape_ratio: 1.0
+            min_n_eff: 6.0
+            freeze_sigma: 0.004
+            pooled_thickness: 0.1
+            pooled_planarity: 0.2
+        scan_patch:
+            min_points: 5
+            sigma_floor: 0.02
+            planar_ratio: 0.1
+        runtime_pos_log_enable: true
+        map_save: false
+        map_file_path: ""
+
+        common:
+            lid_topic:  "/replay/lidar"
+            imu_topic:  "/replay/imu"
+            lidar_reliable: true
+            time_offset_lidar_to_imu: 0.00158466
+
+        preprocess:
+            lidar_type: 2
+            scan_line: 32
+            blind: 0.3
+            point_keep_ratio: 0.5
+            time_field: "time"
+            timestamp_unit: 3
+
+        mapping:
+            gyr_cov: 1.14103e-05              # gyroscope noise density 0.000168896 rad/s/sqrt(Hz), at 400 Hz
+            acc_cov: 0.000456193              # accelerometer noise density 0.00106793 m/s^2/sqrt(Hz), at 400 Hz
+            b_gyr_cov: 3.82814e-10            # gyroscope random walk 9.78281e-07
+            b_acc_cov: 2.81783e-07            # accelerometer random walk 2.65416e-05
+            acc_range: 0.0                    # no saturation model
+            acc_satu_cov: 30.0
+            imu_init_time: 1
+            extrinsic_est_en: false
+            extrinsic_T: [ -0.00695046512231, -0.00671348550157, 0.0498934631616 ]   # lidar to IMU
+            extrinsic_R: [ 0.00660963597424, -0.999976229947, 0.00196524247475,
+                           -0.999977360081, -0.00661209401352, -0.00124484522719,
+                           0.00125781474638, -0.00195696752429, -0.999997298174 ]
+
+        publish:
+            path_en: true
+            scan_publish_en: true
+            dense_publish_en: false
+            scan_bodyframe_pub_en: false

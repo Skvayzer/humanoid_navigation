@@ -1,7 +1,7 @@
 #pragma once
-// Interactive debug session for the map and matching design:
+// Interactive debug session, for tuning the map and the matching:
 //   fastlio_mapping --replay <dataset.g1replay> <odom.tum> --debug-port <port> --ros-args ...
-// A viewer (scripts/lio_viewer in the project) connects on 127.0.0.1:<port>. The replay runs to a chosen
+// A viewer (scripts/lio_viewer) connects on 127.0.0.1:<port>. The replay runs to a chosen
 // scan and stops right before that scan's IEKF update. The IMU-propagated prior, the deskewed scan and the
 // map (ikd-Tree points or voxel-map statistics, by map_type) can then be read out, and the update can be run
 // any number of times from a perturbed prior, recording every iteration per point (status, the matched voxel
@@ -21,7 +21,7 @@
 //   voxel_flags                  plane flags (voxel_map plane test, used by merging) of the voxels of the
 //                                last "map" (after a "set")
 //   poses                        the trajectory so far (float64: scan index, stamp, pos, quat xyzw)
-//   set <key> <value>            voxel_map.{min_points,max_thickness,planarity,max_points}, scan_patch.min_points,
+//   set <key> <value>            voxel_map.{point_sigma,freeze_sigma,shape_ratio,min_n_eff,pooled_thickness,pooled_planarity}, scan_patch.min_points,
 //                                filter_size_surf, max_iteration, extrinsic_est_en (map_type is fixed at start)
 //   continue                     = goto <current scan + 1>
 //   quit                         stop the replay
@@ -42,7 +42,7 @@ namespace dbg
 // Per point and update iteration: 32 float32 (see record_iteration).
 constexpr int POINT_STRIDE = 32;
 // Per voxel: 32 float32 (see dump_map).
-constexpr int VOXEL_STRIDE = 32;
+constexpr int VOXEL_STRIDE = 33;
 // Per downsampled point: 7 float32 of patch statistics (see dump_scan).
 constexpr int PATCH_STRIDE = 7;
 
@@ -71,7 +71,7 @@ struct Session
         bool researched;
         V3D pos;
         Eigen::Quaterniond rot;
-        int effct, matched, dist, group, counts[5];
+        int effct, matched, dist, pooled, counts[5];
         double res_mean;
         std::vector<float> rec;
     };
@@ -201,7 +201,7 @@ struct Session
         it.pos = s.pos;
         it.rot = s.rot;
         it.effct = effct_feat_num;
-        it.matched = it.dist = it.group = 0;
+        it.matched = it.dist = it.pooled = 0;
         std::fill(it.counts, it.counts + 5, 0);
         double res_sum = 0;
         it.rec.assign(size_t(POINT_STRIDE) * feats_down_size, 0.0f);
@@ -223,7 +223,7 @@ struct Session
             r[6] = pw.z;
             if (dm)
             {
-                // 11 distance to the distribution's mean [m], 12-14 the mean (world), 15 a merged group's,
+                // 11 distance to the distribution's mean [m], 12-14 the mean (world), 15 the pooled neighbourhood's,
                 // 16-21 its covariance xx xy xz yy yz zz, 31 squared Mahalanobis distance (gate D2D_GATE) of
                 // the rows set_d2d_rows wrote this iteration (status matched or residual fail)
                 const V3D &m = dist_mean[i];
@@ -232,7 +232,7 @@ struct Session
                 r[12] = m(0);
                 r[13] = m(1);
                 r[14] = m(2);
-                r[15] = from_group[i];
+                r[15] = from_pooled[i] || from_blob[i];
                 const float cov[6] = {float(c(0, 0)), float(c(0, 1)), float(c(0, 2)), float(c(1, 1)), float(c(1, 2)), float(c(2, 2))};
                 std::copy(cov, cov + 6, r + 16);
                 if (point_status[i] == PT_MATCHED || point_status[i] == PT_RESIDUAL_FAIL)
@@ -267,7 +267,7 @@ struct Session
             {
                 it.matched++;
                 it.dist += dm;
-                it.group += dm && from_group[i];
+                it.pooled += dm && (from_pooled[i] || from_blob[i]);
                 res_sum += res_last[i];
             }
         }
@@ -281,12 +281,11 @@ struct Session
         const VoxelMap::Params &vp = voxel_map.params();
         return "\"params\":{\"filter_size_surf\":" + num(filter_size_surf_min) + ",\"filter_size_map\":" + num(filter_size_map_min) +
                ",\"max_iteration\":" + std::to_string(NUM_MAX_ITERATIONS) + ",\"extrinsic_est_en\":" + (extrinsic_est_en ? "true" : "false") +
-               ",\"map_type\":\"" + (use_ikdtree ? "ikdtree" : "voxel") + "\",\"d2d_gate\":" + num(D2D_GATE) + ",\"patch_var_floor\":" + num(PATCH_VAR_FLOOR) +
-               ",\"laser_point_cov\":" + num(LASER_POINT_COV) + ",\"map_insert_rule\":\"" + (map_keep_first_point ? "first_point" : "closest_to_centre") + "\"" +
-               ",\"voxel_map\":{\"size\":" + num(vp.size) + ",\"min_points\":" + std::to_string(vp.min_points) + ",\"max_thickness\":" + num(vp.max_thickness) +
-               ",\"planarity\":" + num(vp.planarity) + ",\"max_points\":" + std::to_string(vp.max_points) +
-               ",\"stored_points\":" + std::to_string(vp.stored_points) + ",\"merge_angle_deg\":" + num(vp.merge_angle_deg) +
-               ",\"merge_distance\":" + num(vp.merge_distance) + "}" +
+               ",\"map_type\":\"" + (use_ikdtree ? "ikdtree" : "voxel") + "\",\"d2d_gate\":" + num(D2D_GATE) + ",\"patch_var_floor\":" + num(patch_sigma_floor * patch_sigma_floor) +
+               ",\"laser_point_cov\":" + num(LASER_POINT_COV) +
+               ",\"voxel_map\":{\"size\":" + num(vp.size) + ",\"point_sigma\":" + num(vp.point_sigma) +
+               ",\"freeze_sigma\":" + num(vp.freeze_sigma) + ",\"shape_ratio\":" + num(vp.shape_ratio) + ",\"min_n_eff\":" + num(vp.min_n_eff) +
+               ",\"pooled_thickness\":" + num(vp.pooled_thickness) + ",\"pooled_planarity\":" + num(vp.pooled_planarity) + "}" +
                ",\"scan_patch\":{\"min_points\":" + std::to_string(scan_patch_min_points) + "}}";
     }
 
@@ -345,7 +344,8 @@ struct Session
                                              float(v.normal(0)), float(v.normal(1)), float(v.normal(2)), float(v.d),
                                              float(l(0)), float(l(1)), float(l(2)),
                                              float(e(0, 0)), float(e(1, 0)), float(e(2, 0)), float(e(0, 1)), float(e(1, 1)), float(e(2, 1)),
-                                             float(e(0, 2)), float(e(1, 2)), float(e(2, 2)), float(v.valid), float(v.frozen)};
+                                             float(e(0, 2)), float(e(1, 2)), float(e(2, 2)), float(v.valid), float(v.frozen),
+                                             float(v.resolved)};
             out.insert(out.end(), rec, rec + VOXEL_STRIDE);
             n_vox++;
         });
@@ -421,7 +421,7 @@ struct Session
             const Iteration &it = iterations[k];
             its += std::string(k > 0 ? "," : "") + "{\"iter\":" + std::to_string(k) + ",\"researched\":" + (it.researched ? "true" : "false") +
                    ",\"pos\":" + vec(it.pos) + ",\"quat\":" + quat(it.rot) + ",\"effct\":" + std::to_string(it.effct) + ",\"matched\":" + std::to_string(it.matched) +
-                   ",\"dist\":" + std::to_string(it.dist) + ",\"group\":" + std::to_string(it.group) + ",\"counts\":[" + std::to_string(it.counts[0]) + "," + std::to_string(it.counts[1]) + "," +
+                   ",\"dist\":" + std::to_string(it.dist) + ",\"pooled\":" + std::to_string(it.pooled) + ",\"counts\":[" + std::to_string(it.counts[0]) + "," + std::to_string(it.counts[1]) + "," +
                    std::to_string(it.counts[2]) + "," + std::to_string(it.counts[3]) + "," + std::to_string(it.counts[4]) + "],\"res_mean\":" + num(it.res_mean) + "}";
             out.insert(out.end(), it.rec.begin(), it.rec.end());
         }
@@ -437,10 +437,12 @@ struct Session
         const bool b = v != 0 && value != "false";
         VoxelMap::Params vp = voxel_map.params();
         bool redo_scan = false, refit = false;
-        if (key == "voxel_map.min_points") { vp.min_points = int(v); refit = true; }
-        else if (key == "voxel_map.max_thickness") { vp.max_thickness = v; refit = true; }
-        else if (key == "voxel_map.planarity") { vp.planarity = v; refit = true; }
-        else if (key == "voxel_map.max_points") { vp.max_points = int(v); refit = true; }
+        if (key == "voxel_map.point_sigma") { vp.point_sigma = v; refit = true; }
+        else if (key == "voxel_map.freeze_sigma") { vp.freeze_sigma = v; refit = true; }
+        else if (key == "voxel_map.shape_ratio") { vp.shape_ratio = v; refit = true; }
+        else if (key == "voxel_map.min_n_eff") { vp.min_n_eff = v; refit = true; }
+        else if (key == "voxel_map.pooled_thickness") { vp.pooled_thickness = v; }
+        else if (key == "voxel_map.pooled_planarity") { vp.pooled_planarity = v; }
         else if (key == "scan_patch.min_points") { scan_patch_min_points = int(v); redo_scan = true; }
         else if (key == "filter_size_surf")
         {
@@ -518,14 +520,14 @@ struct Session
                 else
                 {
                     target_scan = target;
-                    match_time = solve_time = kdtree_search_time = 0;
+                    match_time = solve_time = 0;
                     return reply("\"type\":\"running\",\"target\":" + std::to_string(target_scan));
                 }
             }
             else if (cmd == "continue")
             {
                 target_scan = scan_index + 1;
-                match_time = solve_time = kdtree_search_time = 0;
+                match_time = solve_time = 0;
                 return reply("\"type\":\"running\",\"target\":" + std::to_string(target_scan));
             }
             else if (cmd == "quit")

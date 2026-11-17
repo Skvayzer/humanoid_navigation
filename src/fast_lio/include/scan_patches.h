@@ -4,10 +4,9 @@
 // The deskewed scan is cut into voxels of filter_size_surf (lidar frame). A voxel with fewer than min_points
 // points keeps all of them: in sparse regions every point is a measurement. A fuller voxel becomes one
 // measurement, its centroid, which also carries the covariance of its points for the distribution residual
-// in laserMapping.cpp (h_share_model). Results: results/mac/patch_study, results/mac/voxel2_study.
+// in laserMapping.cpp (h_share_model).
 #include <algorithm>
 #include <cmath>
-#include <utility>
 #include <vector>
 #include <common_lib.h>
 
@@ -22,27 +21,31 @@ inline int voxelize_scan(const PointCloudXYZI &in, double leaf, int min_points, 
                          std::vector<ScanPatch> &patches)
 {
   const size_t N = in.points.size();
-  std::vector<std::pair<uint64_t, uint32_t>> keys(N);  // voxel key (21 bits per axis), point index
-  const auto u = [leaf](float v) { return uint64_t(int64_t(std::floor(v / leaf)) + (1 << 20)) & 0x1FFFFF; };
+  // Voxel key (14 bits per axis: +-2^13 voxels, kilometres in the lidar frame) and point index (22 bits)
+  // packed in one integer, sorted by voxel, then index.
+  std::vector<uint64_t> keys(N);
+  const auto u = [leaf](float v) { return uint64_t(int64_t(std::floor(v / leaf)) + (1 << 13)) & 0x3FFF; };
   for (size_t i = 0; i < N; i++)
   {
     const PointType &p = in.points[i];
-    keys[i] = {(u(p.x) << 42) | (u(p.y) << 21) | u(p.z), uint32_t(i)};
+    keys[i] = (u(p.x) << 50) | (u(p.y) << 36) | (u(p.z) << 22) | uint64_t(i);
   }
   std::sort(keys.begin(), keys.end());
+  const auto voxel = [](uint64_t k) { return k >> 22; };
+  const auto index = [](uint64_t k) { return uint32_t(k & 0x3FFFFF); };
   out.clear();
   patches.clear();
   int count = 0;
   for (size_t b = 0, e; b < N; b = e)
   {
-    for (e = b + 1; e < N && keys[e].first == keys[b].first; e++)
+    for (e = b + 1; e < N && voxel(keys[e]) == voxel(keys[b]); e++)
       ;
     const int n = e - b;
     if (n < min_points)
     {
       for (size_t k = b; k < e; k++)
       {
-        out.push_back(in.points[keys[k].second]);
+        out.push_back(in.points[index(keys[k])]);
         patches.push_back(ScanPatch());
       }
       continue;
@@ -52,14 +55,14 @@ inline int voxelize_scan(const PointCloudXYZI &in, double leaf, int min_points, 
     double intensity = 0;
     for (size_t k = b; k < e; k++)
     {
-      const PointType &p = in.points[keys[k].second];
+      const PointType &p = in.points[index(keys[k])];
       mean += V3D(p.x, p.y, p.z);
       intensity += p.intensity;
     }
     mean /= n;
     for (size_t k = b; k < e; k++)
     {
-      const PointType &p = in.points[keys[k].second];
+      const PointType &p = in.points[index(keys[k])];
       const V3D q = V3D(p.x, p.y, p.z) - mean;
       sp.cov += q * q.transpose();
     }

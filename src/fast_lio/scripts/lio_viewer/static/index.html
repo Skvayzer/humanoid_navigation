@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LIO Map Debugger</title>
+<style>
+  :root { --bg: #111418; --panel: #1b1f26; --panel2: #232833; --fg: #e6e8ec; --muted: #9aa3b2; --accent: #60a5fa; --border: #2e3440; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; overflow: hidden; }
+  #view { position: absolute; left: 390px; top: 0; right: 0; bottom: 0; }
+  #view canvas { display: block; }
+  #side { position: absolute; left: 0; top: 0; bottom: 0; width: 390px; background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; padding: 8px 10px 40px; }
+  h1 { font-size: 14px; margin: 2px 0 8px; font-weight: 600; }
+  h1 small { color: var(--muted); font-weight: 400; }
+  details { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; background: var(--panel2); }
+  details > summary { cursor: pointer; padding: 6px 8px; font-weight: 600; user-select: none; list-style: none; }
+  details > summary::before { content: "▸ "; color: var(--muted); }
+  details[open] > summary::before { content: "▾ "; }
+  details > div { padding: 4px 8px 8px; }
+  .row { display: flex; align-items: center; gap: 6px; margin: 3px 0; flex-wrap: wrap; }
+  .row label { min-width: 0; }
+  .row .k { color: var(--muted); min-width: 92px; }
+  .row input[type=number] { width: 70px; }
+  .row input[type=range] { flex: 1; min-width: 80px; }
+  .slider { display: grid; grid-template-columns: 34px 1fr 64px; gap: 6px; align-items: center; margin: 2px 0; }
+  .slider span { color: var(--muted); }
+  input, select, button { background: #0f1216; color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; font: inherit; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  button { cursor: pointer; background: #2a3140; }
+  button:hover { background: #343c4e; }
+  button.primary { background: #2563eb; border-color: #2563eb; }
+  button:disabled { opacity: .5; cursor: default; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; color: #d0d5de; }
+  .muted { color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; font-size: 11px; }
+  #iterTable { overflow-x: auto; }
+  td, th { padding: 1px 4px; text-align: right; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+  td:first-child, th:first-child { text-align: left; }
+  #minimap { width: 100%; height: 190px; background: #0f1216; border: 1px solid var(--border); border-radius: 4px; cursor: crosshair; display: block; }
+  #status { position: absolute; left: 400px; top: 8px; padding: 4px 10px; background: rgba(27,31,38,.9); border: 1px solid var(--border); border-radius: 6px; color: var(--muted); max-width: 60%; }
+  #status.busy { color: #fbbf24; }
+  #status.error { color: #f87171; white-space: pre-wrap; }
+  #legend { position: absolute; right: 10px; bottom: 10px; padding: 6px 10px; background: rgba(27,31,38,.9); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+  #legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  #legend .sec { margin-top: 4px; color: var(--muted); }
+  #tip { position: absolute; display: none; pointer-events: none; padding: 5px 8px; background: rgba(15,18,22,.95); border: 1px solid var(--border); border-radius: 4px; font-size: 12px; white-space: pre; z-index: 5; }
+  #selected .mono { max-height: 260px; overflow: auto; }
+  .chip { display: inline-block; padding: 0 6px; border-radius: 10px; background: #2a3140; margin-right: 4px; font-size: 11px; }
+  kbd { background: #0f1216; border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-size: 11px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="side">
+  <h1>LIO map debugger <small id="dsname"></small></h1>
+
+  <details open id="sec-scan"><summary>Scan</summary><div>
+    <div class="row">
+      <button id="prev" title="previous scan (restarts the replay)">◀</button>
+      <input id="scanIndex" type="number" min="1" step="1" style="width:80px">
+      <span class="muted" id="scanCount">/ ?</span>
+      <button id="go" class="primary">Go</button>
+      <button id="next" title="next scan (continues the replay)">▶</button>
+    </div>
+    <div class="mono" id="scanInfo">no scan loaded</div>
+    <canvas id="minimap" width="366" height="190" title="click to jump to a scan"></canvas>
+    <div class="row muted" style="font-size:11px">grey: reference trajectory (--trajectory); cyan: poses so far; red: this scan</div>
+  </div></details>
+
+  <details open id="sec-noise"><summary>Pose noise on the prior</summary><div>
+    <div class="slider"><span>x cm</span><input type="range" id="nx" min="-50" max="50" step="0.5" value="0"><input type="number" id="nxv" step="0.5" value="0"></div>
+    <div class="slider"><span>y cm</span><input type="range" id="ny" min="-50" max="50" step="0.5" value="0"><input type="number" id="nyv" step="0.5" value="0"></div>
+    <div class="slider"><span>z cm</span><input type="range" id="nz" min="-50" max="50" step="0.5" value="0"><input type="number" id="nzv" step="0.5" value="0"></div>
+    <div class="slider"><span>roll °</span><input type="range" id="nr" min="-15" max="15" step="0.1" value="0"><input type="number" id="nrv" step="0.1" value="0"></div>
+    <div class="slider"><span>pitch °</span><input type="range" id="np" min="-15" max="15" step="0.1" value="0"><input type="number" id="npv" step="0.1" value="0"></div>
+    <div class="slider"><span>yaw °</span><input type="range" id="nw" min="-15" max="15" step="0.1" value="0"><input type="number" id="nwv" step="0.1" value="0"></div>
+    <div class="row">
+      <label><input type="checkbox" id="autoRun" checked> run on change</label>
+      <button id="run" class="primary">Run update</button>
+      <button id="resetNoise">Reset</button>
+    </div>
+    <div class="row muted" style="font-size:11px">x y z: world frame; roll pitch yaw: body frame (the filter's rotation error convention)</div>
+    <div class="mono" id="noiseInfo"></div>
+  </div></details>
+
+  <details open id="sec-iter"><summary>Update iterations</summary><div>
+    <div class="row"><span class="k">show</span><input type="range" id="iter" min="0" max="0" step="1" value="0"><span id="iterLabel" class="mono">-</span></div>
+    <div id="iterTable"></div>
+    <div class="mono" id="iterInfo"></div>
+  </div></details>
+
+  <details open id="sec-layers"><summary>Layers</summary><div>
+    <div class="row"><label><input type="checkbox" id="L_ikd" checked> ikd-Tree points</label> <label><input type="checkbox" id="L_cells"> their voxels</label> <span class="muted">within</span><input type="number" id="cellRadius" value="6" step="1" min="1" style="width:52px"><span class="muted">m</span></div>
+    <div class="row"><label><input type="checkbox" id="L_ell" checked> voxel distributions (2σ)</label> <label><input type="checkbox" id="L_planes" checked> surface planes</label> <label><input type="checkbox" id="L_cubes"> voxel cubes</label></div>
+    <div class="row"><span class="k">voxel classes</span>
+      <label><input type="checkbox" id="C_valid" checked> surface</label>
+      <label><input type="checkbox" id="C_few" checked> not resolved</label>
+      <label><input type="checkbox" id="C_thick" checked> thick</label>
+      <label><input type="checkbox" id="C_line" checked> not planar</label></div>
+    <div class="row"><span class="k">voxel opacity</span><input type="range" id="voxOpacity" min="0.05" max="1" step="0.05" value="0.3"></div>
+    <div class="row"><label><input type="checkbox" id="zcut" checked> hide everything above lidar +</label><input type="number" id="zcutv" value="1.5" step="0.25" style="width:60px"><span class="muted">m (ceilings)</span></div>
+    <div class="row"><label><input type="checkbox" id="L_raw"> raw scan</label> <label><input type="checkbox" id="L_down" checked> down points</label> <label><input type="checkbox" id="L_res" checked> residuals</label></div>
+    <div class="row"><span class="k">5-NN links</span><select id="nnMode"><option value="selected">selected point</option><option value="all">all points</option><option value="none">none</option></select>
+      <label><input type="checkbox" id="L_frames" checked> frames</label></div>
+    <div class="row"><span class="k">colour points</span><select id="colorMode"><option value="status">status / plane source</option><option value="residual">|residual|</option><option value="patch">patch (n points)</option></select></div>
+    <div class="row"><span class="k">point size</span><input type="range" id="ptSize" min="0.5" max="3" step="0.1" value="1"></div>
+    <div class="row"><span class="k">map radius</span><input type="number" id="mapRadius" value="30" step="5" min="5" style="width:60px"><span class="muted">m</span><button id="reloadMap">Reload map</button></div>
+    <div class="row"><button id="recenter">Recenter on lidar</button><button id="topView">Top view</button></div>
+  </div></details>
+
+  <details id="sec-params"><summary>Matching parameters (applied in the session)</summary><div>
+    <div class="row"><span class="k">voxel map</span><span class="muted">point σ</span><input type="number" id="P_vm_sigma" step="0.005"><span class="muted">freeze σ</span><input type="number" id="P_vm_freeze" step="0.001"></div>
+    <div class="row"><span class="k">resolved</span><span class="muted">shape ratio</span><input type="number" id="P_vm_shape" step="0.1"><span class="muted">min n_eff</span><input type="number" id="P_vm_neff" step="1"></div>
+    <div class="row"><span class="k">pooled surface</span><span class="muted">σ⊥ ≤</span><input type="number" id="P_vm_thick" step="0.005"><span class="muted">λ0/λ1 ≤</span><input type="number" id="P_vm_plan" step="0.01"></div>
+    <div class="row"><span class="k">scan voxel</span><input type="number" id="P_surf" step="0.05" min="0.05"><span class="muted">m</span> <span class="muted">patch min pts</span><input type="number" id="P_sp_min" step="1" min="0"></div>
+    <div class="row"><span class="k">iterations</span><input type="number" id="P_iter" step="1" min="1" max="20"><label><input type="checkbox" id="P_ext"> estimate extrinsic</label></div>
+    <div class="row"><button id="applyParams" class="primary">Apply and rerun</button><button id="revertParams">Revert</button></div>
+    <div class="muted" style="font-size:11px">Voxel thresholds refit every voxel; scan settings re-downsample this scan. They last until the session restarts.</div>
+  </div></details>
+
+  <details open id="selected"><summary>Selected point <span class="muted" style="font-weight:400">(click a down point)</span></summary><div>
+    <div class="mono" id="selInfo">none</div>
+  </div></details>
+
+  <details id="sec-help"><summary>Help</summary><div class="muted" style="font-size:12px">
+    Drag: orbit · right-drag: pan · wheel: zoom · click a down point: details and its 5 map neighbours · hover a voxel: its statistics.<br>
+    <kbd>←</kbd>/<kbd>→</kbd> iteration · <kbd>n</kbd> next scan · <kbd>r</kbd> reset noise.<br>
+    The update runs on the real FAST_LIO code with the state restored afterwards: "▶" continues the record with the unperturbed update.
+  </div></details>
+</div>
+<div id="view"></div>
+<div id="status">starting…</div>
+<div id="legend"></div>
+<div id="tip"></div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

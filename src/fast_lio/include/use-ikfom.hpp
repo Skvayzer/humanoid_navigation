@@ -5,7 +5,7 @@
 
 typedef MTK::vect<3, double> vect3;
 typedef MTK::SO3<double> SO3;
-typedef MTK::S2<double, 98090, 10000, 1> S2; 
+typedef MTK::S2<double, 98100, 10000, 1> S2;   // gravity, length 9.81 = G_m_s2 (common_lib.h): one value of g
 
 MTK_BUILD_MANIFOLD(state_ikfom,
 ((vect3, pos))

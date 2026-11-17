@@ -1,0 +1,57 @@
+# FAST_LIO_G1 on Oxford Spires keble-college-02/05, observatory-quarter-01/02 (Hesai QT64, Alphasense IMU 400 Hz).
+# Input: PointCloud2 on /replay/lidar with a per-point `time` [ns] after the scan start, IMU on /replay/imu.
+# Parameters not set here are as in config/dataset_mid360.yaml + config/outdoor.yaml.
+/**:
+    ros__parameters:
+        max_iteration: 3
+        map_type: "voxel"
+        filter_size_surf: 0.4
+        voxel_map:
+            size: 0.5                    # as config/outdoor.yaml
+            point_sigma: 0.02
+            shape_ratio: 1.0
+            min_n_eff: 6.0
+            freeze_sigma: 0.004
+            pooled_thickness: 0.1
+            pooled_planarity: 0.2
+        scan_patch:
+            min_points: 5
+            sigma_floor: 0.02
+            planar_ratio: 0.1
+        runtime_pos_log_enable: true
+        map_save: false
+        map_file_path: ""
+
+        common:
+            lid_topic:  "/replay/lidar"
+            imu_topic:  "/replay/imu"
+            lidar_reliable: true
+            time_offset_lidar_to_imu: 0
+
+        preprocess:
+            lidar_type: 2
+            scan_line: 64
+            blind: 0.3
+            point_keep_ratio: 0.5
+            time_field: "time"
+            timestamp_unit: 3
+
+        mapping:
+            gyr_cov: 2.04899e-05              # gyroscope noise density 0.000226329 rad/s/sqrt(Hz), at 400 Hz
+            acc_cov: 0.00048423               # accelerometer noise density 0.00110026 m/s^2/sqrt(Hz), at 400 Hz
+            b_gyr_cov: 2.72411e-08            # gyroscope random walk 8.25245e-06
+            b_acc_cov: 4.59877e-07            # accelerometer random walk 3.39071e-05
+            acc_range: 0.0                    # no saturation model
+            acc_satu_cov: 30.0
+            imu_init_time: 1
+            extrinsic_est_en: false
+            extrinsic_T: [ -0.000651708683453, -0.0155103425578, 0.084632657762 ]   # lidar to IMU
+            extrinsic_R: [ -0.0166380457439, -0.999860106398, 0.00171598092096,
+                           0.999855256792, -0.0166318136125, 0.00358431442421,
+                           -0.00355527312055, 0.00177536854117, 0.999992103953 ]
+
+        publish:
+            path_en: true
+            scan_publish_en: true
+            dense_publish_en: false
+            scan_bodyframe_pub_en: false

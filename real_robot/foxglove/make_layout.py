@@ -92,9 +92,25 @@ let cube: Cube | undefined;
 let shown = "";
 let seq = 0;
 
+const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+function base64(s: string): Uint8Array {
+  const t = new Int16Array(128).fill(-1);
+  for (let i = 0; i < 64; i++) t[B64.charCodeAt(i)] = i;
+  const out = new Uint8Array(Math.floor(s.length * 3 / 4));
+  let n = 0, acc = 0, bits = 0;
+  for (let i = 0; i < s.length; i++) {
+    const v = t[s.charCodeAt(i) & 127];
+    if (v < 0) continue;                          // '=' padding, whitespace
+    acc = (acc << 6) | v; bits += 6;
+    if (bits >= 8) { bits -= 8; out[n++] = (acc >> bits) & 255; }
+  }
+  return out.subarray(0, n);
+}
+
 function bytes(d: any): Uint8Array {
   if (d instanceof Uint8Array) return d;
-  if (typeof d === "string") { const b = atob(d); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+  if (d && d.buffer instanceof ArrayBuffer && typeof d.length === "number") return new Uint8Array(d.buffer, d.byteOffset ?? 0, d.length);
+  if (typeof d === "string") return base64(d);     // no atob in the user script sandbox
   return Uint8Array.from(d as number[]);
 }
 
@@ -105,7 +121,7 @@ export default function script(event: Input<"/g1_wb/esdf_cube"> | Input<"/g1_sla
     if (f[0] !== "esdf") return undefined;
     const nz = Number(f[5]);
     cube = { q: bytes(m.data), nx: m.height / nz, ny: m.width, nz, o: [Number(f[1]), Number(f[2]), Number(f[3])], dx: Number(f[4]),
-             lo: Number(f[6]), hi: Number(f[7]), seq: ++seq, stamp: m.header.stamp };
+             lo: Number(f[6]), hi: Number(f[7]), seq: ++seq, stamp: { sec: event.receiveTime.sec, nsec: event.receiveTime.nsec } };
   }
   if (!cube) return undefined;
   const z = Number(globalVars?.esdf_z ?? 0.75);
@@ -183,7 +199,7 @@ config = {
                                    'flatColor': '#505050ff'},
             # what the policy sees: the virtual boxes (esdf_map_virtual), the ESDF slice at 0.75 m, its body sites
             '/g1_wb/virtual_scene': {'visible': True},
-            '/g1_wb/sdf_slice': {'visible': False, 'pointSize': 4, 'pointShape': 'square', 'decayTime': 0, 'colorField': 'intensity',
+            '/g1_wb/sdf_slice': {'visible': True, 'pointSize': 4, 'pointShape': 'square', 'decayTime': 0, 'colorField': 'intensity',
                                  'colorMode': 'colormap', 'colorMap': 'turbo', 'minValue': -0.1, 'maxValue': 1.2, 'explicitAlpha': 0.6},
             # the slider's slice of the whole window (user script esdf_slice); red inside, blue at >= 0.5 m (the policy's clip)
             '/studio_script/esdf_slice': {'visible': True, 'pointSize': 5, 'pointShape': 'square', 'decayTime': 0, 'colorField': 'sdf',

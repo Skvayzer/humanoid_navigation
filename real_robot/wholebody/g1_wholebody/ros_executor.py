@@ -51,6 +51,7 @@ def parse(argv=None):
     p.add_argument('--kp-scale', type=float, default=1.0)
     p.add_argument('--obstacles', choices=OBSTACLE_MODES, default='virtual', help='what the fields are made of at start')
     p.add_argument('--field-workers', type=int, default=2, help='solver processes (joystick mode solves this many goals at once)')
+    p.add_argument('--no-dynamic', action='store_true', help="with --static-map: obstacles = the map only, no lidar layer")
     p.add_argument('--static-map', help="static ESDF npz (esdf_layers) of the room: 'real' / 'both' = this map + the lidar's last 0.5 s")
     p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'median3', 'ema', 'butter2', 'rate'), default='none', help='waist/arm command filter (policy dithering)')
     p.add_argument('--upper-alpha', type=float, default=0.5, help='ema: weight of the new target')
@@ -415,9 +416,9 @@ def main(argv=None):
         m = args.geofence_from_scene; fence = (min(xs) - m, max(xs) + m, min(ys) - m, max(ys) + m)
     log.info('scene %s anchored at (%.2f, %.2f, %.1f deg); goal (%.2f, %.2f); geofence %s' %
              (scene.name, anchor[0], anchor[1], np.degrees(anchor[2]), scene.goal[0], scene.goal[1], fence))
-    worker = FieldWorker(scene, n=args.field_workers, static=args.static_map)
+    worker = FieldWorker(scene, n=args.field_workers, static=args.static_map, dynamic=not args.no_dynamic)
     if args.static_map:
-        log.info('static ESDF layer %s' % args.static_map)
+        log.info('static ESDF layer %s%s' % (args.static_map, ' only (no lidar layer)' if args.no_dynamic else ' + lidar layer'))
     cfg = rn.Config(mount=args.mount, kp_scale=args.kp_scale, geofence=fence, allow_active=args.active,
                     upper_filter=args.upper_filter, upper_alpha=args.upper_alpha, upper_cutoff_hz=args.upper_cutoff_hz,
                     upper_rate=args.upper_rate)
@@ -444,7 +445,7 @@ def main(argv=None):
         elif kind == 'obstacles':
             if value not in OBSTACLE_MODES:
                 ok = False; ex.reason = 'refused obstacles %s: one of %s' % (value, ', '.join(OBSTACLE_MODES))
-            elif value != 'virtual' and bridge.obstacle_points() is None:
+            elif value != 'virtual' and worker.dynamic and bridge.obstacle_points() is None:
                 ok = False; ex.reason = 'refused obstacles %s: no fresh /g1_slam/obstacles' % value
             else:
                 worker.set_world(mode=value); ok = ex.replace_world(ex.planner); ex.reason = 'obstacles %s' % value

@@ -278,7 +278,7 @@ class FieldWorker:
 
     REFRESH_PERIOD_S = 0.1
 
-    def __init__(self, scene, n=1, static=None, **scene_kwargs):
+    def __init__(self, scene, n=1, static=None, dynamic=True, **scene_kwargs):
         ctx = mp.get_context('spawn')                   # no fork of a process that has DDS threads
         self.n = max(1, int(n)); self.max_pending = 1
         self.blocks = [shared_memory.SharedMemory(create=True, size=_SLOT_BYTES) for _ in range(self.n + 5)]
@@ -289,6 +289,9 @@ class FieldWorker:
             scene_kwargs = dict(anchor=(scene.offset[0], scene.offset[1], scene.yaw), anchor_at_start=False,
                                 robot_perception=scene.robot_perception)
         self.static_path = str(static) if static else None
+        self.dynamic = bool(dynamic)    # False: 'real' / 'both' = the static map only (no lidar layer, no refresh)
+        if not self.dynamic and not self.static_path:
+            raise ValueError('no lidar layer needs a static map')
         if self.static_path:
             StaticEsdf(self.static_path)                # fail here, not in the workers
         self.processes = [ctx.Process(target=_worker, daemon=True,
@@ -344,7 +347,7 @@ class FieldWorker:
         if len(self.flight) >= min(self.max_pending, self.n):
             return False
         points = body = None
-        if self.mode != 'virtual':
+        if self.mode != 'virtual' and self.dynamic:
             inputs = self._inputs()
             if inputs is None:
                 return False
@@ -363,7 +366,7 @@ class FieldWorker:
 
     def refresh(self, grid, now):
         """Start re-making `grid` from the newest lidar (real / both), at most every REFRESH_PERIOD_S."""
-        if self.mode == 'virtual' or grid is None or getattr(grid, 'slot', None) is None or self.refreshing is not None \
+        if self.mode == 'virtual' or not self.dynamic or grid is None or getattr(grid, 'slot', None) is None or self.refreshing is not None \
                 or self.refreshed is not None or now < self.next_refresh:
             return False
         inputs = self._inputs()

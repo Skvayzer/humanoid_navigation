@@ -40,7 +40,7 @@ def read_vmap_means(path):
     k = v['key'].astype(np.int64); off = 1 << 20
     idx = np.stack([((k >> 42) & 0x1FFFFF) - off, ((k >> 21) & 0x1FFFFF) - off, (k & 0x1FFFFF) - off], 1)
     size = float(h['params'][0])
-    return idx * size + v['sum'] / v['w'][:, None], size
+    return idx * size + v['sum'] / v['w'][:, None], size, idx
 
 
 def floor_frame(points):
@@ -55,11 +55,18 @@ def apply(t, p):
 
 def main():
     maps, name = Path(sys.argv[1]), sys.argv[2]
-    means, size = read_vmap_means(maps / (name + '.vmap'))
+    means, size, keys = read_vmap_means(maps / (name + '.vmap'))
     t_vmap, fv = floor_frame(means)
     c = read_pcd(maps / (name + '_raw.pcd')); raw = np.column_stack([c['x'], c['y'], c['z']]).astype(float)
     t_raw, fr = floor_frame(raw)
     static = apply(t_raw, raw)
+    # people / the operator: the dense cloud keeps whatever 2 scans saw; the .vmap's free space removed what moved.
+    # Keep the dense points whose .vmap voxel survived (dense floor frame -> .vmap frame: the two floor frames agree)
+    in_vmap = apply(inverse(t_vmap), static)
+    vk = np.floor(in_vmap / size).astype(np.int64)
+    pack = lambda k: ((k[:, 0] + (1 << 20)) << 42) | ((k[:, 1] + (1 << 20)) << 21) | (k[:, 2] + (1 << 20))
+    kept = np.isin(pack(vk), pack(keys))
+    removed = int((~kept).sum()); static = static[kept]
     # agreement: the .vmap's voxel means in its floor frame against the dense cloud in its own
     from scipy.spatial import cKDTree
     d, _ = cKDTree(static).query(apply(t_vmap, means), distance_upper_bound=1.0)
@@ -71,11 +78,13 @@ def main():
     np.savetxt(maps / (name + '_static_path.csv'), np.column_stack([np.arange(len(path)), path[:, :2]]),
                delimiter=',', header='t,x,y', comments='')
     info = dict(T_map_slam_map=t_vmap.tolist(), vmap_floor=fv, dense_floor=fr, voxel_size_m=size,
-                vmap_vs_dense_median_m=float(np.median(d)), vmap_vs_dense_p90_m=float(np.percentile(d, 90)))
+                vmap_vs_dense_median_m=float(np.median(d)), vmap_vs_dense_p90_m=float(np.percentile(d, 90)),
+                dense_points_removed_by_free_space=removed)
     (maps / (name + '_floor.json')).write_text(json.dumps(info, indent=1))
     print('%s: floor %.3f m below the .vmap origin (rms %.1f cm), dense cloud %d points; .vmap voxel means vs dense '
-          'cloud: median %.1f cm, p90 %.1f cm' % (name, fv['height_m'], 100 * fv['rms_m'], len(raw), 100 * info['vmap_vs_dense_median_m'],
-                                                   100 * info['vmap_vs_dense_p90_m']))
+          'cloud: median %.1f cm, p90 %.1f cm; %d dense points not in the .vmap (moved: people) dropped'
+          % (name, fv['height_m'], 100 * fv['rms_m'], len(raw), 100 * info['vmap_vs_dense_median_m'],
+             100 * info['vmap_vs_dense_p90_m'], removed))
 
 
 if __name__ == '__main__':

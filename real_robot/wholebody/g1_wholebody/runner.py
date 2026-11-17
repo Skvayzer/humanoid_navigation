@@ -79,6 +79,8 @@ class Config:
     upper_cutoff_hz: float = 6.0            # butter2: 2nd-order Butterworth low-pass cutoff
     upper_rate: float = 0.5                 # rate: slew limit of the commanded target, rad/s
     speed: Optional[float] = None           # operator speed, m/s (only for policies trained with it: contract 'command')
+    arrive_radius_m: float = 0.25           # operator speed: stand within this of the final goal / hold point ...
+    release_radius_m: float = 0.45          # ... and walk again only once farther than this (hysteresis)
     goal_fence_margin_m: float = 0.3        # an operator goal must lie this far inside the geofence
     hold_goal_tolerance_m: float = 0.5      # 'balance' starts the policy only on hold fields solved this close to here
     limits: Limits = field(default_factory=Limits)
@@ -464,6 +466,15 @@ class Executor:
             ff[12:] = self.kin.upper_gravity(s.q, s.quat_wxyz)
         return LowCmd.body(s.mode_machine, target, kp, self.c['kd'], tau=ff)
 
+    def _arrived(self, pos):
+        """Operator-speed policies: at the final waypoint or the hold point, stand (arrive / release hysteresis)."""
+        p = self.planner
+        target = p.hold_xy if p.hold_xy is not None else (p.waypoints[-1] if p.active == len(p.waypoints) - 1 else None)
+        if target is None:
+            return False
+        distance = float(np.linalg.norm(np.asarray(pos, float)[:2] - np.asarray(target, float)[:2]))
+        return distance < (self.cfg.release_radius_m if self.builder.arrived else self.cfg.arrive_radius_m)
+
     def _policy(self, s, pelvis, now):
         if pelvis is None:
             raise Fault('no pelvis pose')
@@ -480,6 +491,8 @@ class Executor:
             obs = self.builder.reset(s.q, pos, quat, self.fields, dq=s.dq, gyro=s.gyro, pelvis_rotation=rot)
             self.builder_ready = True; self.upper_state = None
         else:
+            if self.cfg.speed is not None:
+                self.builder.arrived = self._arrived(pos)
             obs = self.builder.observe(s.q, s.dq, s.gyro, pos, quat, self.fields, pelvis_rotation=rot)
         action = np.asarray(self.infer(obs), float)
         if action.shape != (NUM_BODY,) or not np.isfinite(action).all():

@@ -210,6 +210,9 @@ def run(args):
                 builder.rearm()
         if active == len(waypoints)-1 and np.linalg.norm(waypoints[-1]-xy) < .4:
             reached = True
+        if args.speed is not None:     # as the executor: stand at the final goal (arrive 0.25 m, release 0.45 m)
+            last = active == len(waypoints)-1; distance = np.linalg.norm(waypoints[-1]-xy)
+            builder.arrived = last and distance < (.45 if builder.arrived else .25)
         if data.qpos[2] < .45:
             fell = True
             break

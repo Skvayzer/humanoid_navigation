@@ -256,6 +256,9 @@ class ObservationBuilder:
         if speed is not None and not 0 < float(speed) <= 1.:
             raise ValueError("operator speed must be in (0, 1] m/s")
         self.speed = None if speed is None else float(speed)     # operator-speed rule (task._operator_command)
+        # Operator-speed rule only: the field no longer slows the robot down at its goal, so the caller stops it there
+        # (arrived=True: zero command, the policy stands as for any zero command; False again: it walks on).
+        self.arrived = False
         self.frequency = float(np.mean(contract['frequency_range']) if frequency is None else frequency)
         self.dt = contract['control_dt']
         elbow = [n for n in contract['feature_names'] if n.startswith('pf.elbows.')]
@@ -309,6 +312,8 @@ class ObservationBuilder:
         positions = self.kin.world_sites(q, base_pos, base_quat) if sites is None else np.asarray(sites, float)
         gf, bf, sdf = self._site_fields(fields, positions)
         command = command_from_fields(gf[1], gf[COMMAND_SITES], bf[COMMAND_SITES], speed=self.speed)
+        if self.speed is not None and self.arrived:
+            command = np.zeros(4)
         if self.speed is not None and self.last_command[0] == 0 and command[0] > .5:
             self.phase = np.array([0., np.pi])     # speed_curriculum.restart_phase: anti-phase stepping on release
         if self.step % self.c['odometry_period_steps'] == 0:

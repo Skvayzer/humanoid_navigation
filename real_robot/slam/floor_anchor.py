@@ -76,6 +76,24 @@ def main():
         info = json.load(open(from_json))
         publish(node, StaticTransformBroadcaster, TransformStamped, np.array(info['T_map_slam_map']))
         log.info('map -> slam_map fixed: from %s (floor %.3f m below the map origin)' % (from_json, info['vmap_floor']['height_m']))
+        # pose hints for the relocalization: Foxglove's pose estimate tool publishes /initialpose in its display frame
+        # (map); FAST-LIO takes them only in slam_map (/g1_slam/initialpose, fastlio_g1.yaml)
+        from geometry_msgs.msg import PoseWithCovarianceStamped
+        t_slam_map = inverse(np.array(info['T_map_slam_map']))
+        hint_pub = node.create_publisher(PoseWithCovarianceStamped, '/g1_slam/initialpose', 1)
+
+        def on_hint(m):
+            if m.header.frame_id not in ('map', 'slam_map'):
+                log.warn('pose hint ignored: frame %s (map or slam_map)' % m.header.frame_id); return
+            if m.header.frame_id == 'map':
+                t = t_slam_map @ pose_to_matrix(m.pose.pose.position, m.pose.pose.orientation)
+                q = matrix_to_quat(t[:3, :3])
+                m.pose.pose.position.x, m.pose.pose.position.y, m.pose.pose.position.z = map(float, t[:3, 3])
+                m.pose.pose.orientation.x, m.pose.pose.orientation.y, m.pose.pose.orientation.z, m.pose.pose.orientation.w = map(float, q)
+                m.header.frame_id = 'slam_map'
+            hint_pub.publish(m)
+            log.info('pose hint -> FAST-LIO: x %.2f y %.2f (slam_map)' % (m.pose.pose.position.x, m.pose.pose.position.y))
+        node.create_subscription(PoseWithCovarianceStamped, '/initialpose', on_hint, 1)
         while rclpy.ok():
             rclpy.spin_once(node, timeout_sec=1.0)
         return

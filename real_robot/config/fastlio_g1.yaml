@@ -91,8 +91,8 @@
 
         localization:                    # [RR] run_slam.sh localize <name> sets map_file=/data/maps/<name>.vmap
             map_file: ""
-            initial_pose_topic: "/initialpose"         # geometry_msgs/PoseWithCovarianceStamped in slam_map (x, y, yaw
-                                                       #   = map's up to the floor tilt): Foxglove's pose estimate tool
+            initial_pose_topic: "/g1_slam/initialpose" # [RR] in slam_map: floor_anchor.py turns Foxglove's /initialpose
+                                                       #   (pose estimate tool, frame map) into this
             status_topic: "/g1_slam/localization_status"
             map_topic: "/g1_slam/prior_map"
             search_z: 0.0

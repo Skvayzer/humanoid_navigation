@@ -162,6 +162,9 @@ class Bridge:
         self.status = self.node.create_publisher(String, '/g1_wb/status', 5)
         self.scene_pub = self.node.create_publisher(MarkerArray, '/g1_wb/virtual_scene', latched)
         self.slice_pub = self.node.create_publisher(PointCloud2, '/g1_wb/sdf_slice', 1)
+        from sensor_msgs.msg import Image
+        self.Image = Image
+        self.cube_pub = self.node.create_publisher(Image, '/g1_wb/esdf_cube', 1)   # the whole window, for the viewer's slider
         self.pelvis_pub = self.node.create_publisher(PoseStamped, '/g1_wb/pelvis', 5)
         self.goal_pub = self.node.create_publisher(PoseStamped, '/g1_wb/goal', 1)
         self.sites_pub = self.node.create_publisher(PointCloud2, '/g1_wb/sites', 2)
@@ -334,6 +337,20 @@ class Bridge:
         p = np.asarray(positions, float)
         self.sites_pub.publish(self._cloud([p[:, 0], p[:, 1], p[:, 2], np.asarray(sdf, float)], ('x', 'y', 'z', 'sdf')))
 
+    CUBE_LO, CUBE_HI = -0.1, 0.6
+
+    def publish_cube(self, fields):
+        """The policy's whole sdf window as mono8 (CUBE_LO..CUBE_HI m in 255 steps), layer after layer: height = nz * nx,
+        width = ny; frame_id = 'esdf <origin x y z> <dx> <nz> <lo> <hi>' (the viewer script cuts the slider's layer)."""
+        sdf = fields.sdf; nx, ny, nz = sdf.shape
+        q = np.empty((nz, nx, ny), np.uint8)
+        np.clip((np.moveaxis(sdf, 2, 0) - self.CUBE_LO) * (255. / (self.CUBE_HI - self.CUBE_LO)) + .5, 0, 255, out=q, casting='unsafe')
+        m = self.Image(); m.header.stamp = self.node.get_clock().now().to_msg()
+        m.header.frame_id = 'esdf %.4f %.4f %.4f %.4f %d %.3f %.3f' % (*fields.origin, fields.dx, nz, self.CUBE_LO, self.CUBE_HI)
+        m.height, m.width, m.encoding, m.is_bigendian, m.step = nz * nx, ny, 'mono8', 0, ny
+        m.data = array.array('B', q.tobytes())
+        self.cube_pub.publish(m)
+
     def publish_slice(self, fields):
         k = int(np.clip(round((GOAL_Z - fields.origin[2]) / fields.dx), 0, fields.sdf.shape[2] - 1))
         nx, ny = fields.sdf.shape[:2]
@@ -456,7 +473,7 @@ def main(argv=None):
         ex.command('shadow')
 
     recorder = Recorder(args.log_dir) if args.log_dir else None
-    last_slice = None
+    last_slice = last_cube = None
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set()); signal.signal(signal.SIGTERM, lambda *_: stop.set())
     zeros29, zeros4, zeros2 = np.zeros(29), np.zeros(4), np.zeros(2)
@@ -530,6 +547,9 @@ def main(argv=None):
             if n % 50 == 25 and ex.fields is not None and ex.fields is not last_slice:
                 last_slice = ex.fields
                 bridge.publish_slice(ex.fields)
+            if n % 25 == 12 and ex.fields is not None and ex.fields is not last_cube:     # 2 Hz, only new fields
+                last_cube = ex.fields
+                bridge.publish_cube(ex.fields)
     finally:
         if args.active and ex.mode in rn.ACTIVE and ex.state is not None:
             ex.command('damp')                       # never go quiet while the motors hold policy targets

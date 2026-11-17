@@ -69,7 +69,7 @@
      "visible": true
     },
     "/g1_wb/sdf_slice": {
-     "visible": true,
+     "visible": false,
      "pointSize": 4,
      "pointShape": "square",
      "decayTime": 0,
@@ -79,6 +79,19 @@
      "minValue": -0.1,
      "maxValue": 1.2,
      "explicitAlpha": 0.6
+    },
+    "/studio_script/esdf_slice": {
+     "visible": true,
+     "pointSize": 5,
+     "pointShape": "square",
+     "decayTime": 0,
+     "colorField": "sdf",
+     "colorMode": "colormap",
+     "colorMap": "turbo",
+     "reverseColormap": true,
+     "minValue": -0.1,
+     "maxValue": 0.6,
+     "explicitAlpha": 0.7
     },
     "/g1_wb/sites": {
      "visible": true,
@@ -328,6 +341,14 @@
    "diffEnabled": false,
    "expansion": "all"
   },
+  "GlobalVariableSliderPanel!esdfz": {
+   "sliderProps": {
+    "min": 0.02,
+    "max": 1.5,
+    "step": 0.04
+   },
+   "globalVariableName": "esdf_z"
+  },
   "RosOut!log": {
    "searchTerms": [
     "g1_wb"
@@ -501,11 +522,17 @@
    ]
   }
  },
- "globalVariables": {},
+ "globalVariables": {
+  "esdf_z": 0.74
+ },
  "userNodes": {
   "wb-status": {
    "name": "wb_status",
    "sourceCode": "// Splits the executor's JSON status (/g1_wb/status, 5 Hz) into fields for the Indicator and Plot panels.\nimport { Input } from \"./types\";\n\nexport const inputs = [\"/g1_wb/status\"];\nexport const output = \"/studio_script/wb_status\";\n\ntype Output = {\n  mode: string;\n  rope: string;\n  obstacles: string;\n  scene: string;\n  goal: string;\n  reason: string;\n  policy_wait: string;\n  step_ms: number;\n  latency_ms: number;\n  overruns: number;\n  fields_age_s: number;\n  field_solve_s: number;\n  field_error: string;\n  goal_dist_m: number;\n  waypoint: number;\n  latch: number;\n  reached: boolean;\n  hold: boolean;\n  active_allowed: boolean;\n};\n\nconst num = (v: unknown): number => (typeof v === \"number\" ? v : NaN);\n\nexport default function script(event: Input<\"/g1_wb/status\">): Output | undefined {\n  let s: Record<string, unknown>;\n  try {\n    s = JSON.parse(event.message.data);\n  } catch {\n    return undefined;\n  }\n  const mode = String(s.mode ?? \"?\");\n  const wait = s.policy_wait == null ? \"\" : String(s.policy_wait);\n  const xy = s.pelvis_xy as number[] | null;\n  const fg = s.field_goal as number[] | null;\n  const g = s.goal_xy as number[] | null;\n  // the gantry procedure: slacken the rope only once the policy itself stands still (training stop latch at 0)\n  let rope = \"motors off\";\n  if (mode === \"STAND_UP\" || mode === \"STAND\") rope = \"KEEP ROPE: stiff stand\";\n  else if (mode === \"POLICY\" && wait !== \"\") rope = \"KEEP ROPE: policy waiting\";\n  else if (mode === \"POLICY\" && s.hold) rope = s.latch === 0 ? \"standing: rope may slacken\" : \"KEEP ROPE: settling\";\n  else if (mode === \"POLICY\") rope = \"walking\";\n  else if (mode === \"DAMP\") rope = \"DAMP\";\n  return {\n    mode, rope, obstacles: String(s.obstacles ?? \"?\"), scene: String(s.scene ?? \"?\"),\n    goal: g ? `(${g[0].toFixed(2)}, ${g[1].toFixed(2)})` : \"scene goal\",\n    reason: String(s.reason ?? \"\"), policy_wait: wait,\n    step_ms: num(s.step_ms), latency_ms: num(s.latency_ms), overruns: num(s.overruns),\n    fields_age_s: num(s.fields_age_s), field_solve_s: num(s.field_solve_s),\n    field_error: s.field_error == null ? \"\" : String(s.field_error),\n    goal_dist_m: xy && fg ? Math.hypot(xy[0] - fg[0], xy[1] - fg[1]) : NaN,\n    waypoint: num(s.waypoint), latch: num(s.latch), reached: Boolean(s.reached), hold: Boolean(s.hold),\n    active_allowed: Boolean(s.active_allowed),\n  };\n}\n"
+  },
+  "esdf-slice": {
+   "name": "esdf_slice",
+   "sourceCode": "// The policy's ESDF at the height of the \"esdf_z\" slider: cuts the executor's whole window (/g1_wb/esdf_cube, mono8,\n// 2 Hz) into one layer. Odometry (50 Hz) only wakes the script, so the slice follows the slider at once.\nimport { Input } from \"./types\";\nimport { PointCloud } from \"@foxglove/schemas\";\n\nexport const inputs = [\"/g1_wb/esdf_cube\", \"/g1_slam/odometry\"];\nexport const output = \"/studio_script/esdf_slice\";\n\ntype Cube = { q: Uint8Array; nx: number; ny: number; nz: number; o: number[]; dx: number; lo: number; hi: number; seq: number; stamp: any };\nlet cube: Cube | undefined;\nlet shown = \"\";\nlet seq = 0;\n\nfunction bytes(d: any): Uint8Array {\n  if (d instanceof Uint8Array) return d;\n  if (typeof d === \"string\") { const b = atob(d); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }\n  return Uint8Array.from(d as number[]);\n}\n\nexport default function script(event: Input<\"/g1_wb/esdf_cube\"> | Input<\"/g1_slam/odometry\">, globalVars: any): PointCloud | undefined {\n  if (event.topic === \"/g1_wb/esdf_cube\") {\n    const m: any = event.message;\n    const f = String(m.header.frame_id).split(\" \");\n    if (f[0] !== \"esdf\") return undefined;\n    const nz = Number(f[5]);\n    cube = { q: bytes(m.data), nx: m.height / nz, ny: m.width, nz, o: [Number(f[1]), Number(f[2]), Number(f[3])], dx: Number(f[4]),\n             lo: Number(f[6]), hi: Number(f[7]), seq: ++seq, stamp: m.header.stamp };\n  }\n  if (!cube) return undefined;\n  const z = Number(globalVars?.esdf_z ?? 0.75);\n  const k = Math.max(0, Math.min(cube.nz - 1, Math.round((z - cube.o[2]) / cube.dx)));\n  const key = `${k} ${cube.seq}`;\n  if (key === shown) return undefined;\n  shown = key;\n  const { nx, ny, dx, o, lo, hi } = cube;\n  const n = nx * ny, base = k * n, scale = (hi - lo) / 255;\n  const data = new Uint8Array(16 * n);\n  const v = new DataView(data.buffer);\n  for (let i = 0; i < nx; i++) {\n    for (let j = 0; j < ny; j++) {\n      const p = i * ny + j, b = 16 * p;\n      v.setFloat32(b, o[0] + i * dx, true);\n      v.setFloat32(b + 4, o[1] + j * dx, true);\n      v.setFloat32(b + 8, o[2] + k * dx, true);\n      v.setFloat32(b + 12, lo + cube.q[base + p] * scale, true);\n    }\n  }\n  return {\n    timestamp: cube.stamp, frame_id: \"map\",\n    pose: { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },\n    point_stride: 16,\n    fields: [{ name: \"x\", offset: 0, type: 7 }, { name: \"y\", offset: 4, type: 7 }, { name: \"z\", offset: 8, type: 7 }, { name: \"sdf\", offset: 12, type: 7 }],\n    data,\n  };\n}\n"
   }
  },
  "playbackConfig": {
@@ -520,14 +547,19 @@
    "splitPercentage": 10,
    "first": {
     "direction": "row",
-    "first": "Indicator!mode",
-    "second": {
+    "first": {
      "direction": "row",
-     "first": "Indicator!rope",
-     "second": "Indicator!obstacles",
+     "first": "Indicator!mode",
+     "second": "Indicator!rope",
      "splitPercentage": 50.0
     },
-    "splitPercentage": 33.333333333333336
+    "second": {
+     "direction": "row",
+     "first": "Indicator!obstacles",
+     "second": "GlobalVariableSliderPanel!esdfz",
+     "splitPercentage": 50.0
+    },
+    "splitPercentage": 50.0
    },
    "second": {
     "direction": "column",

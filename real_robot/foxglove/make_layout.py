@@ -79,6 +79,63 @@ export default function script(event: Input<"/g1_wb/status">): Output | undefine
 }
 '''
 
+SLICE_SCRIPT = r'''// The policy's ESDF at the height of the "esdf_z" slider: cuts the executor's whole window (/g1_wb/esdf_cube, mono8,
+// 2 Hz) into one layer. Odometry (50 Hz) only wakes the script, so the slice follows the slider at once.
+import { Input } from "./types";
+import { PointCloud } from "@foxglove/schemas";
+
+export const inputs = ["/g1_wb/esdf_cube", "/g1_slam/odometry"];
+export const output = "/studio_script/esdf_slice";
+
+type Cube = { q: Uint8Array; nx: number; ny: number; nz: number; o: number[]; dx: number; lo: number; hi: number; seq: number; stamp: any };
+let cube: Cube | undefined;
+let shown = "";
+let seq = 0;
+
+function bytes(d: any): Uint8Array {
+  if (d instanceof Uint8Array) return d;
+  if (typeof d === "string") { const b = atob(d); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+  return Uint8Array.from(d as number[]);
+}
+
+export default function script(event: Input<"/g1_wb/esdf_cube"> | Input<"/g1_slam/odometry">, globalVars: any): PointCloud | undefined {
+  if (event.topic === "/g1_wb/esdf_cube") {
+    const m: any = event.message;
+    const f = String(m.header.frame_id).split(" ");
+    if (f[0] !== "esdf") return undefined;
+    const nz = Number(f[5]);
+    cube = { q: bytes(m.data), nx: m.height / nz, ny: m.width, nz, o: [Number(f[1]), Number(f[2]), Number(f[3])], dx: Number(f[4]),
+             lo: Number(f[6]), hi: Number(f[7]), seq: ++seq, stamp: m.header.stamp };
+  }
+  if (!cube) return undefined;
+  const z = Number(globalVars?.esdf_z ?? 0.75);
+  const k = Math.max(0, Math.min(cube.nz - 1, Math.round((z - cube.o[2]) / cube.dx)));
+  const key = `${k} ${cube.seq}`;
+  if (key === shown) return undefined;
+  shown = key;
+  const { nx, ny, dx, o, lo, hi } = cube;
+  const n = nx * ny, base = k * n, scale = (hi - lo) / 255;
+  const data = new Uint8Array(16 * n);
+  const v = new DataView(data.buffer);
+  for (let i = 0; i < nx; i++) {
+    for (let j = 0; j < ny; j++) {
+      const p = i * ny + j, b = 16 * p;
+      v.setFloat32(b, o[0] + i * dx, true);
+      v.setFloat32(b + 4, o[1] + j * dx, true);
+      v.setFloat32(b + 8, o[2] + k * dx, true);
+      v.setFloat32(b + 12, lo + cube.q[base + p] * scale, true);
+    }
+  }
+  return {
+    timestamp: cube.stamp, frame_id: "map",
+    pose: { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },
+    point_stride: 16,
+    fields: [{ name: "x", offset: 0, type: 7 }, { name: "y", offset: 4, type: 7 }, { name: "z", offset: 8, type: 7 }, { name: "sdf", offset: 12, type: 7 }],
+    data,
+  };
+}
+'''
+
 GREY, ORANGE, GREEN, BLUE, RED, AMBER = '#707070', '#e0701a', '#1f9d3a', '#2f6fdf', '#e02020', '#d08000'
 
 
@@ -126,8 +183,12 @@ config = {
                                    'flatColor': '#505050ff'},
             # what the policy sees: the virtual boxes (esdf_map_virtual), the ESDF slice at 0.75 m, its body sites
             '/g1_wb/virtual_scene': {'visible': True},
-            '/g1_wb/sdf_slice': {'visible': True, 'pointSize': 4, 'pointShape': 'square', 'decayTime': 0, 'colorField': 'intensity',
+            '/g1_wb/sdf_slice': {'visible': False, 'pointSize': 4, 'pointShape': 'square', 'decayTime': 0, 'colorField': 'intensity',
                                  'colorMode': 'colormap', 'colorMap': 'turbo', 'minValue': -0.1, 'maxValue': 1.2, 'explicitAlpha': 0.6},
+            # the slider's slice of the whole window (user script esdf_slice); red inside, blue at >= 0.5 m (the policy's clip)
+            '/studio_script/esdf_slice': {'visible': True, 'pointSize': 5, 'pointShape': 'square', 'decayTime': 0, 'colorField': 'sdf',
+                                          'colorMode': 'colormap', 'colorMap': 'turbo', 'reverseColormap': True, 'minValue': -0.1, 'maxValue': 0.6,
+                                          'explicitAlpha': 0.7},
             '/g1_wb/sites': {'visible': True, 'pointSize': 14, 'pointShape': 'circle', 'decayTime': 0, 'colorField': 'sdf',
                              'colorMode': 'gradient', 'gradient': ['#ff2020ff', '#20e050ff'], 'minValue': 0.0, 'maxValue': 0.3},
             '/g1_wb/pelvis': {'visible': True, 'type': 'arrow', 'arrowScale': [0.45, 0.08, 0.08], 'color': '#2f9bffff'},
@@ -153,6 +214,7 @@ config = {
     'Plot!timing': plot([path('step_ms', 'step ms (budget 18)'), path('latency_ms', 'LowState -> command ms')], 25),
     'Plot!fields': plot([path('fields_age_s', 'fields age s'), path('field_solve_s', 'solve s'), path('goal_dist_m', 'pelvis to field goal m')], 8),
     'RawMessages!status': {'topicPath': '/studio_script/wb_status', 'diffEnabled': False, 'expansion': 'all'},
+    'GlobalVariableSliderPanel!esdfz': {'sliderProps': {'min': 0.02, 'max': 1.50, 'step': 0.04}, 'globalVariableName': 'esdf_z'},
     'RosOut!log': {'searchTerms': ['g1_wb'], 'minLogLevel': 2, 'topicToRender': '/rosout'},
 }
 ops = [('stand', AMBER, 'IDLE -> STAND (remote L1+A)'), ('balance', GREEN, 'STAND -> policy, goal = here (L1+X)'),
@@ -175,11 +237,12 @@ config['Tab!info'] = {'activeTabIdx': 0, 'tabs': [{'title': 'Status', 'layout': 
                                                   {'title': 'Log', 'layout': 'RosOut!log'}]}
 
 side = dict(direction='column', splitPercentage=10,
-            first=row(['Indicator!mode', 'Indicator!rope', 'Indicator!obstacles']),
+            first=row(['Indicator!mode', 'Indicator!rope', 'Indicator!obstacles', 'GlobalVariableSliderPanel!esdfz']),
             second=dict(direction='column', splitPercentage=12, first=row(op_ids),
                         second=dict(direction='column', splitPercentage=10, first=row(obs_ids),
                                     second=dict(direction='column', splitPercentage=14, first=row(scene_ids), second='Tab!info'))))
-layout = {'configById': config, 'globalVariables': {}, 'userNodes': {'wb-status': {'name': 'wb_status', 'sourceCode': SCRIPT}},
+layout = {'configById': config, 'globalVariables': {'esdf_z': 0.74},
+          'userNodes': {'wb-status': {'name': 'wb_status', 'sourceCode': SCRIPT}, 'esdf-slice': {'name': 'esdf_slice', 'sourceCode': SLICE_SCRIPT}},
           'playbackConfig': {'speed': 1}, 'layout': dict(direction='row', splitPercentage=62, first='3D!wb', second=side)}
 (HERE / 'wholebody_layout.json').write_text(json.dumps(layout, indent=1, ensure_ascii=False) + '\n')
 print('wrote %s: %d scene buttons' % (HERE / 'wholebody_layout.json', len(scene_ids)))

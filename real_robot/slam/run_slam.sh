@@ -45,7 +45,9 @@ case "$mode" in
   odom) ;;
   *) echo "usage: $0 odom | mapping <name> | localize <name>" >&2; exit 2 ;;
 esac
-ros2 run fast_lio fastlio_mapping "${lio[@]}" > /data/logs/fast_lio.log 2>&1 &
+# the binary itself, not `ros2 run`: Foxy's ros2 run does not pass SIGINT on, and FAST-LIO writes the map (mapping)
+# only when it gets one; through the wrapper it was killed at the docker stop timeout with nothing written
+"$(ros2 pkg prefix fast_lio)/lib/fast_lio/fastlio_mapping" "${lio[@]}" > /data/logs/fast_lio.log 2>&1 &
 pids+=($!)
 
 : > /data/logs/floor_anchor.log      # truncate here: the background redirect below may run after the first grep

@@ -123,6 +123,7 @@ case "${1:-status}" in
       --mount "type=bind,src=$repo/real_robot/wholebody/g1_wholebody,dst=/opt/wb/g1_wholebody,readonly=true" \
       $(for f in state_core perception_core wholebody_core wholebody_fields wholebody_sim; do
           printf -- '--mount type=bind,src=%s/cat/%s.py,dst=/opt/wb/cat/%s.py,readonly=true ' "$repo" "$f" "$f"; done) \
+      --mount "type=bind,src=$repo/cat/wholebody,dst=/opt/wb/cat/wholebody,readonly=true" \
       "$wb_image" run "$@" "${extra[@]}" --log-dir /data/logs >/dev/null
     sleep 3; sudo docker logs "$wb_name" 2>&1 | tail -5 ;;
   viz)              # Foxglove bridge for this stack: the CAT viewer image, writable only for /g1_wb/{operator,scene,obstacle_mode,goal_pose}

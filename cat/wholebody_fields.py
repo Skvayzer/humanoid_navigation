@@ -28,12 +28,19 @@ def training_fields(blocked, first_center, dx, goal):
         raise ValueError("invalid field geometry")
     if blocked.all():
         raise ValueError("no free space")
-    eps = 1e-9
     if blocked.any():
         sdf = skfmm.distance(np.where(blocked, -1., 1.), dx=dx).astype(np.float32)
     else:
         sdf = np.full(blocked.shape, float(np.linalg.norm(np.array(blocked.shape)*dx)), np.float32)
-    bf = np.stack(np.gradient(sdf, dx, dx, dx, edge_order=2), axis=-1).astype(np.float32)
+    g = goal_gradient(blocked, origin, dx, goal)
+    gf, bunit = mix_guidance(sdf, g, blocked, dx)
+    return FieldGrid(sdf, gf, bunit, origin, dx)
+
+
+def goal_gradient(blocked, first_center, dx, goal):
+    """Raw guidance before the boundary blending: -grad of the geodesic distance to the goal seed (the slow part).
+    Depends on the occupancy and the goal only, so it can be reused while the sdf near it is refreshed."""
+    origin = np.asarray(first_center, dtype=float); goal = np.asarray(goal, dtype=float)
     axes = [origin[i]+np.arange(blocked.shape[i])*dx for i in range(3)]
     X, Y, Z = np.meshgrid(*axes, indexing='ij')
     seed = ((X-goal[0])**2+(Y-goal[1])**2+(Z-goal[2])**2) <= GOAL_SEED_RADIUS**2
@@ -43,7 +50,14 @@ def training_fields(blocked, first_center, dx, goal):
     T_ma = np.ma.asarray(skfmm.distance(phi, dx=dx))     # skfmm returns a plain array when nothing is masked
     free = ~np.ma.getmaskarray(T_ma)
     T = T_ma.filled(float(np.max(T_ma[free])) if free.any() else 0.).astype(np.float32)
-    g = -np.stack(np.gradient(T, dx, dx, dx, edge_order=2), axis=-1).astype(np.float32)
+    return -np.stack(np.gradient(T, dx, dx, dx, edge_order=2), axis=-1).astype(np.float32)
+
+
+def mix_guidance(sdf, g, blocked, dx):
+    """sdf + raw guidance -> (unit guidance gf, unit boundary bf), as training: guidance turned tangential within
+    R_PROJ_CELLS of a wall, the outward normal inside obstacles."""
+    eps = 1e-9
+    bf = np.stack(np.gradient(sdf, dx, dx, dx, edge_order=2), axis=-1).astype(np.float32)
     bnorm = np.linalg.norm(bf, axis=-1, keepdims=True)
     bunit = np.where(bnorm > eps, bf/np.maximum(bnorm, eps), 0.).astype(np.float32)
     g_perp = g-np.sum(g*bunit, axis=-1, keepdims=True)*bunit
@@ -53,7 +67,4 @@ def training_fields(blocked, first_center, dx, goal):
     g_mix[blocked] = bunit[blocked]
     mag = np.linalg.norm(g_mix, axis=-1, keepdims=True)
     gf = np.where(mag > eps, g_mix/np.maximum(mag, eps), 0.).astype(np.float32)
-    for a in (sdf, gf, bunit):
-        if not np.isfinite(a).all():
-            raise ValueError("nonfinite potential field")
-    return FieldGrid(sdf, gf, bunit, origin, dx)
+    return gf, bunit

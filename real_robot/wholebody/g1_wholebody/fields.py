@@ -18,12 +18,13 @@ from pathlib import Path
 import numpy as np
 
 from wholebody_core import FieldGrid, WHOLEBODY
-from wholebody_fields import training_fields
+from wholebody_fields import goal_gradient, mix_guidance, training_fields
 from wholebody_sim import DX, WINDOW, box_corners_test
+
+from .esdf_layers import REAL_Z, StaticEsdf, band, combine, dynamic_voxels, fmm_sdf, influence_box, remove_body, stamp_sdf, union_box
 
 GOAL_Z = .75
 OBSTACLE_MODES = ('virtual', 'real', 'both')
-REAL_Z = (0.10, 1.40)          # real points kept as obstacles: above the floor, below the window top (as sim's robot_perception)
 
 
 def scene_dirs():
@@ -170,10 +171,46 @@ class FieldPlanner:
 
 # ------------------------------------------------------------------------------------------------ worker process
 _SHAPE = tuple(WINDOW)
+_N = int(np.prod(_SHAPE))
+_SLOT_BYTES = 44 * _N          # sdf 4 | gf 12 | bf 12 | raw guidance g 12 | base sdf 4 (bytes per voxel)
 
 
-def _worker(requests, results, names, scene_spec, scene_kwargs):
+def compose(mode, scene, static, points, body, first, shape):
+    """The window's (base sdf, sdf, blocked, dynamic box). base: what does not change between solves (the static map
+    crop and/or the virtual boxes; with no map in 'real', the lidar window of this solve). sdf = min(base, dynamic
+    lidar); the box bounds where the dynamic voxels changed it (esdf_layers.influence_box)."""
+    if mode == 'virtual':
+        base = fmm_sdf(scene.occupancy(first, shape))
+        return base, base, base < 0, None
+    pts = remove_body(band(points), body)
+    occ_v = scene.occupancy(first, shape) if mode == 'both' else None
+    if static is not None:
+        base = static.crop(first, shape)
+        if occ_v is not None and occ_v.any():
+            base = np.minimum(base, fmm_sdf(occ_v))
+    else:
+        occ = points_occupancy(pts, first, shape)
+        base = fmm_sdf(occ if occ_v is None else occ | occ_v)
+    idx = dynamic_voxels(pts, first, shape, base)
+    sdf, blocked = combine(base, idx)
+    return base, sdf, blocked, influence_box(idx, shape)
+
+
+def _apply_roi(out, roi, idx):
+    lo, hi = roi
+    lo2, hi2 = np.maximum(lo - 2, 0), np.minimum(hi + 2, np.asarray(_SHAPE))
+    sl2 = tuple(slice(a, b) for a, b in zip(lo2, hi2))
+    base = out[4][sl2]
+    sub = base if len(idx) == 0 else np.minimum(base, stamp_sdf(idx - lo2, base.shape))
+    gf, bf = mix_guidance(sub, out[3][sl2], sub < 0, DX)
+    inner = tuple(slice(a - c, b - c) for a, b, c in zip(lo, hi, lo2))
+    sl = tuple(slice(a, b) for a, b in zip(lo, hi))
+    out[0][sl] = sub[inner]; out[1][sl] = gf[inner]; out[2][sl] = bf[inner]
+
+
+def _worker(requests, results, names, scene_spec, scene_kwargs, static_path):
     scene, mode = VirtualScene(scene_spec, **scene_kwargs), 'virtual'
+    static = StaticEsdf(static_path) if static_path else None
     blocks = [shared_memory.SharedMemory(name=n) for n in names]
     views = [_views(b.buf) for b in blocks]
     while True:
@@ -185,61 +222,108 @@ def _worker(requests, results, names, scene_spec, scene_kwargs):
             if spec is not None:
                 scene = VirtualScene(spec, **kwargs)
             continue
-        _, seq, slot, base_xy, goal_xy, points = req
-        t = time.monotonic()
-        if mode == 'virtual':
-            occupancy = scene.occupancy
-        elif mode == 'real':
-            occupancy = lambda first, shape: points_occupancy(points, first, shape)
-        else:
-            occupancy = lambda first, shape: scene.occupancy(first, shape) | points_occupancy(points, first, shape)
+        kind, seq, t = req[0], req[1], time.monotonic()
         try:
-            fields, goal = solve_fields(base_xy, goal_xy, occupancy)
-            sdf, gf, bf = views[slot]
-            sdf[...] = fields.sdf; gf[...] = fields.gf; bf[...] = fields.bf
-            results.put((seq, slot, fields.origin.tolist(), fields.dx, goal.tolist(), time.monotonic() - t, None))
+            if kind == 'field':                             # full solve: window, goal projection, geodesic (slow)
+                _, _, slot, base_xy, goal_xy, points, body = req
+                cache = {}
+
+                def occupancy(first, shape):
+                    cache['r'] = compose(mode, scene, static, points, body, first, shape)
+                    return cache['r'][2]
+                first, blocked, goal = window_request(base_xy, goal_xy, occupancy)
+                base, sdf, _, box = cache['r']
+                if blocked.all():
+                    raise ValueError('no free space')
+                out = views[slot]
+                g = goal_gradient(blocked, first, DX, goal)
+                gf, bf = mix_guidance(sdf, g, blocked, DX)
+                out[0][...] = sdf; out[1][...] = gf; out[2][...] = bf; out[3][...] = g; out[4][...] = base
+            else:                                           # 'refresh': same window and geodesic, fresh lidar (fast)
+                _, _, src, slot, first, goal, src_box, points, body = req
+                out = views[slot]
+                for a, b in zip(out, views[src]):
+                    a[...] = b
+                idx = dynamic_voxels(remove_body(band(points), body), first, _SHAPE, out[4])
+                box = influence_box(idx, _SHAPE)
+                roi = union_box(box, None if src_box is None else (np.asarray(src_box[0]), np.asarray(src_box[1])))
+                if roi is not None:
+                    _apply_roi(out, roi, idx)
+            box = None if box is None else (box[0].tolist(), box[1].tolist())
+            results.put((kind, seq, slot, list(map(float, first)), DX, list(map(float, goal)), box, time.monotonic() - t, None))
         except Exception as exc:  # reported, never silently stale: the control side ages the old fields out
-            results.put((seq, slot, None, None, None, time.monotonic() - t, repr(exc)))
+            results.put((kind, seq, None, None, None, None, None, time.monotonic() - t, repr(exc)))
     for b in blocks:
         b.close()
 
 
 def _views(buf):
-    n = int(np.prod(_SHAPE))
+    n = _N
     sdf = np.ndarray(_SHAPE, np.float32, buf, 0)
     gf = np.ndarray(_SHAPE + (3,), np.float32, buf, 4 * n)
     bf = np.ndarray(_SHAPE + (3,), np.float32, buf, 16 * n)
-    return sdf, gf, bf
+    g = np.ndarray(_SHAPE + (3,), np.float32, buf, 28 * n)
+    base = np.ndarray(_SHAPE, np.float32, buf, 40 * n)
+    return sdf, gf, bf, g, base
 
 
 class FieldWorker:
-    """Field computation in `n` spawned processes. poll() returns the newest FieldGrid when one is ready. The grid
-    the control loop is using is never written: each request takes a slot that is neither in use nor in flight.
-    max_pending = how many requests may be solved at once (1 normally; up to n for the joystick's fast goals)."""
+    """Field computation in `n` spawned solver processes plus one refresh process, through shared memory.
 
-    def __init__(self, scene, n=1, **scene_kwargs):
+    poll() returns the newest full solve (FieldGrid, goal). In 'real' / 'both', refresh(grid) re-makes the grid the
+    control loop is using from the newest lidar every REFRESH_PERIOD_S (same window and geodesic, new sdf / boundary /
+    guidance blending, ~10-50 ms) and take_refreshed() hands back (that grid, its refresh). No slot that the control
+    loop may read (hold()) or that is in flight is ever written. max_pending = how many full solves may run at once
+    (1 normally; up to n for the joystick's fast goals). static: a StaticEsdf npz (esdf_layers) for 'real' / 'both'."""
+
+    REFRESH_PERIOD_S = 0.1
+
+    def __init__(self, scene, n=1, static=None, **scene_kwargs):
         ctx = mp.get_context('spawn')                   # no fork of a process that has DDS threads
-        size = 28 * int(np.prod(_SHAPE))
         self.n = max(1, int(n)); self.max_pending = 1
-        self.blocks = [shared_memory.SharedMemory(create=True, size=size) for _ in range(self.n + 1)]
+        self.blocks = [shared_memory.SharedMemory(create=True, size=_SLOT_BYTES) for _ in range(self.n + 5)]
         self.views = [_views(b.buf) for b in self.blocks]
-        self.queues, self.results = [ctx.Queue() for _ in range(self.n)], ctx.Queue()
+        self.queues, self.results = [ctx.Queue() for _ in range(self.n + 1)], ctx.Queue()    # the last: refreshes
         spec = scene.spec if isinstance(scene, VirtualScene) else load_scene(scene)
         if isinstance(scene, VirtualScene):
             scene_kwargs = dict(anchor=(scene.offset[0], scene.offset[1], scene.yaw), anchor_at_start=False,
                                 robot_perception=scene.robot_perception)
-        self.processes = [ctx.Process(target=_worker, args=(q, self.results, [b.name for b in self.blocks], spec, scene_kwargs),
-                                      daemon=True) for q in self.queues]
+        self.static_path = str(static) if static else None
+        if self.static_path:
+            StaticEsdf(self.static_path)                # fail here, not in the workers
+        self.processes = [ctx.Process(target=_worker, daemon=True,
+                                      args=(q, self.results, [b.name for b in self.blocks], spec, scene_kwargs, self.static_path))
+                          for q in self.queues]
         for pr in self.processes:
             pr.start()
         self.in_use, self.flight, self.seq, self.delivered, self.turn = None, {}, 0, 0, 0
         self.last_compute_s, self.last_error = None, None
         self.mode, self.scene, self.world_seq = 'virtual', scene, 0
         self.points_source = None       # real / both: callable -> (N, 3) map-frame points, or None when there are none fresh
+        self.body_source = None         # callable -> esdf_layers.body_capsules of the robot now (points inside: not obstacles)
+        self.held, self.refreshing, self.refreshed, self.next_refresh = set(), None, None, 0.
+        self.last_refresh_s, self.refreshes = None, 0
 
     @property
     def pending(self):
         return next(iter(self.flight.values()), None)
+
+    def _free_slot(self, *extra):
+        busy = {slot for slot, _ in self.flight.values()} | {self.in_use} | self.held | set(extra)
+        if self.refreshing is not None:
+            busy |= {self.refreshing[1].slot, self.refreshing[2]}
+        if self.refreshed is not None:
+            busy |= {self.refreshed[0].slot, self.refreshed[1].slot}
+        return next((i for i in range(len(self.blocks)) if i not in busy), None)
+
+    def _inputs(self):
+        """(points, body) for 'real' / 'both', or None when there is no fresh cloud (never solve from nothing)."""
+        points = self.points_source() if self.points_source is not None else None
+        if points is None:
+            self.last_error = 'no fresh real obstacle cloud'
+            return None
+        body = self.body_source() if self.body_source is not None else None
+        return np.asarray(points, np.float32), body
 
     def set_world(self, mode=None, scene=None):
         """Switch the obstacle source and/or the virtual scene. Answers to requests made before are dropped."""
@@ -259,31 +343,67 @@ class FieldWorker:
     def request(self, base_xy, goal_xy):
         if len(self.flight) >= min(self.max_pending, self.n):
             return False
-        points = None
+        points = body = None
         if self.mode != 'virtual':
-            points = self.points_source() if self.points_source is not None else None
-            if points is None:                  # never solve 'real' from nothing: it would read as free space
-                self.last_error = 'no fresh real obstacle cloud'
+            inputs = self._inputs()
+            if inputs is None:
                 return False
-            points = np.asarray(points, np.float32)
-        busy = {slot for slot, _ in self.flight.values()} | {self.in_use}
-        slot = next(i for i in range(len(self.blocks)) if i not in busy)
+            points, body = inputs
+        slot = self._free_slot()
+        if slot is None:
+            return False
         self.seq += 1; self.flight[self.seq] = (slot, time.monotonic())
-        self.queues[self.turn].put(('field', self.seq, slot, list(map(float, base_xy[:2])), list(map(float, goal_xy[:2])), points))
+        self.queues[self.turn].put(('field', self.seq, slot, list(map(float, base_xy[:2])), list(map(float, goal_xy[:2])), points, body))
         self.turn = (self.turn + 1) % self.n
         return True
+
+    def hold(self, grids):
+        """The grids the control loop may read: their slots are never written."""
+        self.held = {g.slot for g in grids if g is not None and getattr(g, 'slot', None) is not None}
+
+    def refresh(self, grid, now):
+        """Start re-making `grid` from the newest lidar (real / both), at most every REFRESH_PERIOD_S."""
+        if self.mode == 'virtual' or grid is None or getattr(grid, 'slot', None) is None or self.refreshing is not None \
+                or self.refreshed is not None or now < self.next_refresh:
+            return False
+        inputs = self._inputs()
+        if inputs is None:
+            return False
+        slot = self._free_slot(grid.slot)
+        if slot is None:
+            return False
+        self.seq += 1; self.refreshing = (self.seq, grid, slot); self.next_refresh = now + self.REFRESH_PERIOD_S
+        self.queues[-1].put(('refresh', self.seq, grid.slot, slot, list(map(float, grid.origin)), list(map(float, grid.goal)),
+                             grid.box, *inputs))
+        return True
+
+    def take_refreshed(self):
+        out, self.refreshed = self.refreshed, None
+        return out
+
+    def _grid(self, slot, origin, dx, goal, box):
+        sdf, gf, bf, _, _ = self.views[slot]
+        grid = FieldGrid(sdf, gf, bf, origin, dx); grid.slot = slot; grid.goal = np.asarray(goal); grid.box = box
+        return grid
 
     def poll(self):
         new = None
         while not self.results.empty():
-            seq, slot, origin, dx, goal, seconds, error = self.results.get_nowait()
+            kind, seq, slot, origin, dx, goal, box, seconds, error = self.results.get_nowait()
+            if kind == 'refresh':
+                src, self.refreshing = self.refreshing, None
+                self.last_refresh_s = seconds
+                if error is not None:
+                    self.last_error = error
+                elif src is not None and src[0] == seq and seq >= self.world_seq:
+                    self.refreshed = (src[1], self._grid(slot, origin, dx, goal, box)); self.refreshes += 1
+                continue
             self.flight.pop(seq, None); self.last_compute_s = seconds; self.last_error = error
             if seq < self.world_seq or seq < self.delivered:   # another world, or overtaken by a newer answer
                 continue
             if error is None:
-                sdf, gf, bf = self.views[slot]
                 self.in_use, self.delivered = slot, seq
-                new = (FieldGrid(sdf, gf, bf, origin, dx), np.asarray(goal))
+                new = (self._grid(slot, origin, dx, goal, box), np.asarray(goal))
         return new
 
     def close(self):

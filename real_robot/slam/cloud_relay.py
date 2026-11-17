@@ -3,8 +3,8 @@
 
   /g1_slam/map        the room so far: 10 cm voxels seen in >= 2 scans, camera_init, every 2 s
                       (not with --no-map: in mapping mode map_builder publishes it)
-  /g1_slam/obstacles  what is around the robot now: scans of the last 1.5 s, 4 cm voxels within 4 m of the
-                      sensor, camera_init, 4 Hz (the executor's 'real' obstacle source)
+  /g1_slam/obstacles  what is around the robot now: scans of the last 0.5 s, 4 cm voxels within 4 m of the
+                      sensor, camera_init, 10 Hz (the executor's 'real' obstacle source)
 
   cloud_relay.py [--no-map]          (started by run_slam.sh in every mode)
 """
@@ -19,7 +19,7 @@ from map_builder import Accumulator, cloud_msg, view
 from slam_common import cloud_xyz
 
 MAP_VOXEL, MAP_PERIOD_S = 0.10, 2.0
-OBST_VOXEL, OBST_WINDOW_S, OBST_RADIUS_M, OBST_PERIOD_S = 0.04, 1.5, 4.0, 0.25
+OBST_VOXEL, OBST_WINDOW_S, OBST_RADIUS_M, OBST_PERIOD_S = 0.04, 0.5, 4.0, 0.1
 
 
 def voxel_down(pts, voxel):

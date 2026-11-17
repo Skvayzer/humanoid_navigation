@@ -313,6 +313,22 @@ class Executor:
             self._take_fields(now, fields, goal, hold=kind == 'hold')
         # anything else is a stale answer to an outdated question: dropped
 
+    def _refresh_fields(self, now):
+        """Real obstacles: swap in the lidar refresh of the fields in use (same window and goal, newer sdf), start the
+        next one. Sources without refresh (virtual-only, the simulators' DelayedFields) are left as they are."""
+        fs = self.fields_source
+        if not hasattr(fs, 'refresh'):
+            return
+        got = fs.take_refreshed()
+        if got is not None:
+            src, grid = got
+            if self.fields is src:
+                self.fields = grid
+            if self.prefetched is not None and self.prefetched[0] is src:
+                self.prefetched = (grid,) + tuple(self.prefetched[1:])
+        fs.hold([self.fields, self.prefetched[0] if self.prefetched is not None else None])
+        fs.refresh(self.fields, now)
+
     def _advance(self, now):
         """Waypoint switched: use the prefetched fields at once if they are for this waypoint, else solve now."""
         if self.prefetched is not None and self.prefetched[2] == self.planner.active:
@@ -409,6 +425,7 @@ class Executor:
                     raise Fault('no LowState')
                 return None
             self._poll_fields(now)
+            self._refresh_fields(now)
             remote = self._remote(now, s)
             if remote is not None:
                 self.command(remote)

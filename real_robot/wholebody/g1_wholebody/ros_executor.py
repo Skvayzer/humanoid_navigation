@@ -25,6 +25,7 @@ import numpy as np
 
 from wholebody_core import WHOLEBODY, load_contract, quat_matrix
 from . import runner as rn
+from .esdf_layers import body_capsules
 from .fields import FieldPlanner, FieldWorker, VirtualScene, GOAL_Z, OBSTACLE_MODES, available_scenes
 from .frames import PelvisChain, heading, matrix_quat, transform
 from .kinematics import FastKinematics
@@ -50,6 +51,7 @@ def parse(argv=None):
     p.add_argument('--kp-scale', type=float, default=1.0)
     p.add_argument('--obstacles', choices=OBSTACLE_MODES, default='virtual', help='what the fields are made of at start')
     p.add_argument('--field-workers', type=int, default=2, help='solver processes (joystick mode solves this many goals at once)')
+    p.add_argument('--static-map', help="static ESDF npz (esdf_layers) of the room: 'real' / 'both' = this map + the lidar's last 0.5 s")
     p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'median3', 'ema', 'butter2', 'rate'), default='none', help='waist/arm command filter (policy dithering)')
     p.add_argument('--upper-alpha', type=float, default=0.5, help='ema: weight of the new target')
     p.add_argument('--upper-cutoff-hz', type=float, default=6.0, help='butter2: cutoff')
@@ -396,12 +398,19 @@ def main(argv=None):
         m = args.geofence_from_scene; fence = (min(xs) - m, max(xs) + m, min(ys) - m, max(ys) + m)
     log.info('scene %s anchored at (%.2f, %.2f, %.1f deg); goal (%.2f, %.2f); geofence %s' %
              (scene.name, anchor[0], anchor[1], np.degrees(anchor[2]), scene.goal[0], scene.goal[1], fence))
-    worker = FieldWorker(scene, n=args.field_workers)
+    worker = FieldWorker(scene, n=args.field_workers, static=args.static_map)
+    if args.static_map:
+        log.info('static ESDF layer %s' % args.static_map)
     cfg = rn.Config(mount=args.mount, kp_scale=args.kp_scale, geofence=fence, allow_active=args.active,
                     upper_filter=args.upper_filter, upper_alpha=args.upper_alpha, upper_cutoff_hz=args.upper_cutoff_hz,
                     upper_rate=args.upper_rate)
     ex = rn.Executor(contract, kin, infer, FieldPlanner(scene), worker, cfg)
     worker.points_source = bridge.obstacle_points
+
+    def body_now():
+        pelvis = ex._pelvis(ex.state) if ex.state is not None else None
+        return None if pelvis is None else body_capsules(kin, ex.state.q, pelvis[0], pelvis[1])
+    worker.body_source = body_now
     world = dict(scene=scene, scenes=available_scenes())
 
     def show_world():
@@ -498,6 +507,8 @@ def main(argv=None):
                               waypoint=ex.planner.active, reached=ex.planner.reached, hold=ex.planner.hold_xy is not None,
                               fields_age_s=None if ex.fields_time is None else round(now - ex.fields_time, 1),
                               field_solve_s=None if worker.last_compute_s is None else round(worker.last_compute_s, 2),
+                              field_refresh_s=None if worker.last_refresh_s is None else round(worker.last_refresh_s, 3),
+                              field_refreshes=worker.refreshes,
                               field_error=worker.last_error, policy_wait=L.get('policy_wait'), active_allowed=args.active,
                               field_goal=None if ex.field_goal is None else np.round(np.asarray(ex.field_goal)[:2], 2).tolist(),
                               field_hold=ex.field_hold, latch=int(ex.builder.stop) if ex.builder_ready else None,

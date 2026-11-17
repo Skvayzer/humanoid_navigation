@@ -10,7 +10,9 @@
 #   g1.sh wb active <executor args>           policy may drive the motors (gantry checklist!)
 #   g1.sh wb stop                             stop the executor (it damps for 0.5 s first if active)
 #   g1.sh op <stand|balance|go|stop|damp|reset|shadow|idle>   operator command to the executor
-#   g1.sh up --geofence XMIN XMAX YMIN YMAX [executor args]   whole stack once, then drive it from the remote
+#   g1.sh up --geofence XMIN XMAX YMIN YMAX [--map NAME] [executor args]   whole stack once, then drive it from the remote
+#                                             (--map: localize in NAME, real obstacles = its static ESDF + last 0.5 s of lidar)
+#   g1.sh static-esdf <map> [--extent XMIN XMAX YMIN YMAX]   static ESDF of a saved map (once per map)
 #   g1.sh down                                stop all of it
 #   g1.sh demo [start|stop] [--fps 10]      AR camera video + bag of what the robot sees, one take per walk
 #   g1.sh viz [start|stop]                    Foxglove bridge whose buttons may write /g1_wb/{operator,scene,obstacle_mode,goal_pose}
@@ -113,8 +115,9 @@ case "${1:-status}" in
       extra=(--active --start idle)
     fi
     sudo docker run --detach --name "$wb_name" "${common[@]}" --cpus "${G1_WB_CPUS:-3}" ${G1_WB_CPUSET:+--cpuset-cpus "$G1_WB_CPUSET"} \
-      --memory 3g --shm-size 256m --mount "type=bind,src=$runtime/wholebody/logs,dst=/data/logs" \
+      --memory 3g --shm-size 512m --mount "type=bind,src=$runtime/wholebody/logs,dst=/data/logs" \
       --mount "type=bind,src=$runtime/wholebody/scenes,dst=/data/scenes,readonly=true" -e G1_SCENES_DIR=/data/scenes \
+      --mount "type=bind,src=$runtime/slam/maps,dst=/data/maps,readonly=true" \
       "$wb_image" run "$@" "${extra[@]}" --log-dir /data/logs >/dev/null
     sleep 3; sudo docker logs "$wb_name" 2>&1 | tail -5 ;;
   viz)              # Foxglove bridge for this stack: the CAT viewer image, writable only for /g1_wb/{operator,scene,obstacle_mode,goal_pose}
@@ -145,10 +148,24 @@ case "${1:-status}" in
       --mount "type=bind,src=$repo/real_robot/demo/ar_demo.py,dst=/opt/demo/ar_demo.py,readonly=true" \
       --mount "type=bind,src=$workspace/runtime/demo,dst=/data/demo" g1-rr-demo:latest --out /data/demo "${@:3}" >/dev/null
     sleep 4; sudo docker logs --tail 3 "$dm" 2>&1 ;;
+  static-esdf)      # static ESDF layer of a saved map: runtime/slam/maps/<name>_esdf.npz (for up --map <name>)
+    name="${2:?map name in runtime/slam/maps}"; shift 2
+    maps="$runtime/slam/maps"; [[ -r "$maps/$name.pcd" ]] || { echo "no $maps/$name.pcd" >&2; exit 2; }
+    path=(); [[ -r "$maps/${name}_path.csv" ]] && path=(--path "/data/maps/${name}_path.csv")
+    sudo docker run --rm "${common[@]}" --memory 4g --mount "type=bind,src=$maps,dst=/data/maps" \
+      --entrypoint python3 -w /opt/wb "$wb_image" -m g1_wholebody.esdf_layers "/data/maps/$name.pcd" "/data/maps/${name}_esdf.npz" "${path[@]}" "$@" ;;
   up)               # the whole stack once (SLAM odom, executor active in IDLE, Foxglove bridge, motor log); then the remote drives it
     shift
     printf '%s\n' "$@" | grep -q -- '--geofence' || { echo "up needs --geofence XMIN XMAX YMIN YMAX (real free floor round the start mark)" >&2; exit 2; }
     printf '%s\n' "$@" | grep -q -- '--scene' || set -- --scene flat_walk_4m --anchor-at-robot "$@"
+    map=; args=()                  # --map NAME: SLAM localize in NAME + its static ESDF for real obstacles
+    while (($#)); do if [[ "$1" == --map ]]; then map="$2"; shift 2; else args+=("$1"); shift; fi; done
+    set -- "${args[@]}"
+    if [[ -n "$map" ]]; then
+      [[ -r "$runtime/slam/maps/${map}_esdf.npz" ]] || { echo "no ${map}_esdf.npz: g1.sh static-esdf $map" >&2; exit 2; }
+      set -- "$@" --static-map "/data/maps/${map}_esdf.npz"
+      running "$slam_name" || "$0" slam localize "$map"
+    fi
     running "$slam_name" || "$0" slam odom
     "$0" wb active "$@"
     "$0" viz

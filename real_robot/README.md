@@ -261,12 +261,13 @@ site may not change severity (crashed the node at the first DAMP — it still le
 
 ## Hand-protective policies (2026-11-17)
 
-Three more whole-body policies ship next to `u596` and `robust_delay_v1_u150` (nothing replaced; the default stays
+Four more whole-body policies ship next to `u596` and `robust_delay_v1_u150` (nothing replaced; the default stays
 `robust_delay_v1_u150`). Same runtime contract and training randomisation; select with `--policy <name>`:
 
 | `--policy` | For |
 |---|---|
 | `stationary_hands_S2far_u200` | standing hand protection (needs fields that see moving objects: not with the current per-waypoint fields) |
+| `stationary_hands_S2far2_u330` | the same with wider margins: the hand retreats farther (0.30 m target) |
 | `stationary_hands_T2_u410` | walking between tables facing forward with the hands raised (gaps >= 0.54 m) |
 | `stationary_hands_E2_u300` | all-round traversal, energy-priced |
 

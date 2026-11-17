@@ -32,7 +32,7 @@ from .lowlevel import decode_lowstate, NUM_MOTORS
 
 POLICIES = {'u596': WHOLEBODY, 'robust_delay_v1_u150': WHOLEBODY / 'robust_delay_v1_u150'}
 # Hand-protective variants (2026-11-17): same runtime contract, own folders; see cat/WHOLEBODY.md and each README.
-HAND_POLICIES = ('stationary_hands_S2far_u200', 'stationary_hands_T2_u410', 'stationary_hands_E2_u300')
+HAND_POLICIES = ('stationary_hands_S2far_u200', 'stationary_hands_S2far2_u330', 'stationary_hands_T2_u410', 'stationary_hands_E2_u300')
 POLICIES.update({name: WHOLEBODY / name for name in HAND_POLICIES})
 
 

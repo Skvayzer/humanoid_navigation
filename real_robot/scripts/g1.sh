@@ -156,6 +156,7 @@ case "${1:-status}" in
     for f in "$name.vmap" "${name}_raw.pcd" "${name}_path.csv" "${name}_info.json"; do
       [[ -r "$maps/$f" ]] || { echo "no $maps/$f (record the map with g1.sh slam mapping $name)" >&2; exit 2; }; done
     sudo docker run --rm "${common[@]}" --memory 2g --mount "type=bind,src=$maps,dst=/data/maps" \
+      --mount "type=bind,src=$repo/real_robot/slam,dst=/opt/real_robot/slam,readonly=true" \
       --entrypoint python3 "$slam_image" /opt/real_robot/slam/map_floor.py /data/maps "$name"
     sudo docker run --rm "${common[@]}" --memory 4g --mount "type=bind,src=$maps,dst=/data/maps" \
       --entrypoint python3 -w /opt/wb "$wb_image" -m g1_wholebody.esdf_layers "/data/maps/${name}_static.pcd" \

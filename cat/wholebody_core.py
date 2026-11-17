@@ -62,8 +62,15 @@ def unit(values, eps=1e-6):
     return values/(np.linalg.norm(values, axis=-1, keepdims=True)+eps)
 
 
-def command_from_fields(rtf, cgf, cbf):
-    """task_math.compute_cmd_from_rtf: root guidance, projected so no limb moves into its obstacle."""
+OPERATOR_CUTOUT = .05    # m/s of projected field command below which the operator-speed rule stops (task._operator_command)
+
+
+def command_from_fields(rtf, cgf, cbf, speed=None, cutout=OPERATOR_CUTOUT):
+    """task_math.compute_cmd_from_rtf: root guidance, projected so no limb moves into its obstacle.
+
+    speed=None: the original rule (about 0.525 m/s, braking near obstacles, zero below 0.2 m/s).
+    speed=S (policies trained with an operator speed, task._operator_command): the same projected direction at S m/s;
+    zero only where the projection leaves less than `cutout` m/s."""
     v = rtf[:2]*.7
     bhat = cbf[:, :2]/(np.linalg.norm(cbf[:, :2], axis=-1, keepdims=True)+1e-9)
     limits = (bhat*cgf[:, :2]).sum(-1)
@@ -71,12 +78,21 @@ def command_from_fields(rtf, cgf, cbf):
     diff = (limits-projected)/((bhat**2).sum(-1)+1e-9)
     delta = np.where((limits > projected)[:, None], diff[:, None]*bhat, 0.)
     velocity = v+delta.mean(0)
+    if speed is not None:
+        velocity = velocity*.75
+        magnitude = float(np.linalg.norm(velocity))
+        go = magnitude >= cutout
+        direction = velocity/max(magnitude, 1e-6)
+        return np.concatenate(([.75*go], direction*(speed*go), [0.]))
     command = np.concatenate(([1.], velocity, [0.]))*.75
     return np.zeros(4) if np.linalg.norm(command[1:]) < .2 else command
 
 
-def update_phase(command, last_command, stop, phase, phase_dt, gait_bound):
-    """task_math.update_phase for a field-driven world (room_enabled False). Returns command, stop, phase, gait."""
+def update_phase(command, last_command, stop, phase, phase_dt, gait_bound, restart=False):
+    """task_math.update_phase for a field-driven world (room_enabled False). Returns command, stop, phase, gait.
+    restart=True (operator-speed policies, as room_enabled in training): no stop latch, a move command re-arms."""
+    if restart and command[0] > .5:
+        stop = 100
     before = stop > 50; during = (not before) and stop > 0; after = (not before) and (not during)
     move2stop = last_command[0] == 1. and command[0] == 0. and before
     if move2stop:
@@ -235,8 +251,11 @@ class ObservationBuilder:
     Training randomises the gait frequency in [1.3, 1.5] Hz per episode; deployment uses `frequency`.
     """
 
-    def __init__(self, contract, kinematics, frequency=None):
+    def __init__(self, contract, kinematics, frequency=None, speed=None):
         self.c, self.kin = contract, kinematics
+        if speed is not None and not 0 < float(speed) <= 1.:
+            raise ValueError("operator speed must be in (0, 1] m/s")
+        self.speed = None if speed is None else float(speed)     # operator-speed rule (task._operator_command)
         self.frequency = float(np.mean(contract['frequency_range']) if frequency is None else frequency)
         self.dt = contract['control_dt']
         elbow = [n for n in contract['feature_names'] if n.startswith('pf.elbows.')]
@@ -262,7 +281,7 @@ class ObservationBuilder:
         positions = self.kin.world_sites(q, base_pos, base_quat) if sites is None else np.asarray(sites, float)
         gf, bf, sdf = self._site_fields(fields, positions)
         gf, bf = unit(gf), unit(bf)
-        self.command = command_from_fields(gf[1], gf[COMMAND_SITES], bf[COMMAND_SITES])
+        self.command = command_from_fields(gf[1], gf[COMMAND_SITES], bf[COMMAND_SITES], speed=self.speed)
         self.command_delay = self.command.copy(); self.last_command = np.zeros(4)
         self.gf_delay, self.bf_delay, self.sdf_delay = gf, bf, sdf
         self.sdf_prev = np.zeros(4)
@@ -289,16 +308,19 @@ class ObservationBuilder:
         self.last_command = self.command.copy()
         positions = self.kin.world_sites(q, base_pos, base_quat) if sites is None else np.asarray(sites, float)
         gf, bf, sdf = self._site_fields(fields, positions)
-        command = command_from_fields(gf[1], gf[COMMAND_SITES], bf[COMMAND_SITES])
+        command = command_from_fields(gf[1], gf[COMMAND_SITES], bf[COMMAND_SITES], speed=self.speed)
+        if self.speed is not None and self.last_command[0] == 0 and command[0] > .5:
+            self.phase = np.array([0., np.pi])     # speed_curriculum.restart_phase: anti-phase stepping on release
         if self.step % self.c['odometry_period_steps'] == 0:
             self.odom_pos, self.odom_quat = base_pos.copy(), base_quat.copy()
         delayed = delay_body_pos(base_pos, base_quat, self.odom_pos, self.odom_quat, positions[:11])
         gfd, bfd, sdfd = self._site_fields(fields, delayed)
         command, self.stop, self.phase, gait = update_phase(command, self.last_command, self.stop, self.phase,
-                                                            self.phase_dt, self.c['gait_bound'])
+                                                            self.phase_dt, self.c['gait_bound'], restart=self.speed is not None)
         move = float(command[0] > .5)
         self.gf_delay, self.bf_delay, self.sdf_delay = unit(gfd)*move, unit(bfd), sdfd
-        self.command_delay = command_from_fields(self.gf_delay[1], self.gf_delay[COMMAND_SITES], self.bf_delay[COMMAND_SITES])
+        self.command_delay = command_from_fields(self.gf_delay[1], self.gf_delay[COMMAND_SITES], self.bf_delay[COMMAND_SITES],
+                                                 speed=self.speed)
         self.command = command
         self.step += 1
         return self._observe(q, dq, gyro, base_pos, base_quat, fields, positions)

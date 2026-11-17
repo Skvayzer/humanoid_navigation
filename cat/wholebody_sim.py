@@ -113,7 +113,7 @@ def run(args):
     data.qpos[7:] = contract['nominal']
     mujoco.mj_forward(model, data)
     waypoints = scene.waypoints(args.waypoint_spacing); active = 0
-    builder = ObservationBuilder(contract, kin, frequency=args.frequency)
+    builder = ObservationBuilder(contract, kin, frequency=args.frequency, speed=args.speed)
 
     held = {'step': -1, 'noise': (np.zeros(2), 0.)}
     def pose():
@@ -256,6 +256,7 @@ def main():
     p.add_argument('--waypoint-spacing', type=float, default=1.6)
     p.add_argument('--advance-radius', type=float, default=.8)
     p.add_argument('--frequency', type=float, default=1.4, help='gait frequency (training: U(1.3, 1.5) Hz)')
+    p.add_argument('--speed', type=float, help='operator speed (m/s) for policies trained with one; default: the field speed rule')
     p.add_argument('--pose-noise', type=float, default=0., help='pelvis xy noise std (m) and yaw noise std (rad)')
     p.add_argument('--pose-latency', type=int, default=0, help='pose latency in control steps (20 ms)')
     p.add_argument('--pose-period', type=int, default=1, help='pose noise refreshed every N control steps (SLAM rate); 1 = every step')

@@ -48,6 +48,8 @@ def parse(argv=None):
     p.add_argument('--geofence-from-scene', type=float, metavar='MARGIN',
                    help='geofence = scene bounding box + MARGIN (only if that floor is really free)')
     p.add_argument('--mount', default='unitree_urdf', choices=('unitree_urdf', 'robot_xml'))
+    p.add_argument('--speed', type=float, help='operator speed in m/s, for policies trained with one (their policy_contract.json '
+                   '"command" record, e.g. 0.1-0.6 m/s): the field gives the direction, this the speed; start low (0.15)')
     p.add_argument('--active', action='store_true', help='allow motor commands (gantry procedure; see README)')
     p.add_argument('--start', choices=('idle', 'shadow'), default='idle')
     p.add_argument('--kp-scale', type=float, default=1.0)
@@ -109,6 +111,21 @@ class Recorder:
 
     def close(self):
         self.flush(); self.queue.put(None); self.thread.join(timeout=10)
+
+
+def checked_speed(contract, speed):
+    """An operator-speed policy needs --speed inside the range it was trained on; other policies must not get one."""
+    rule = (contract.get('command') or {}).get('rule', 'field_speed')
+    if rule != 'operator_speed':
+        if speed is not None:
+            raise SystemExit('--speed: this policy was trained with the field speed (about 0.53 m/s), not an operator speed')
+        return None
+    low, high = contract['command']['trained_speed_m_s']
+    if speed is None:
+        raise SystemExit(f'this policy needs --speed (trained {low}-{high} m/s; start with 0.15)')
+    if not low <= speed <= high:
+        raise SystemExit(f'--speed {speed} outside the trained range {low}-{high} m/s')
+    return float(speed)
 
 
 def policy_paths(name):
@@ -366,6 +383,7 @@ def main(argv=None):
     args = parse(argv)
     onnx_path, contract_path = policy_paths(args.policy)
     contract = load_contract(contract_path); kin = FastKinematics(contract)
+    args.speed = checked_speed(contract, args.speed)
     import onnxruntime as ort
     opts = ort.SessionOptions(); opts.intra_op_num_threads = 1; opts.inter_op_num_threads = 1
     session = ort.InferenceSession(str(onnx_path), opts, providers=['CPUExecutionProvider'])
@@ -400,7 +418,7 @@ def main(argv=None):
     log.info('scene %s anchored at (%.2f, %.2f, %.1f deg); goal (%.2f, %.2f); geofence %s' %
              (scene.name, anchor[0], anchor[1], np.degrees(anchor[2]), scene.goal[0], scene.goal[1], fence))
     worker = FieldWorker(scene, n=args.field_workers)
-    cfg = rn.Config(mount=args.mount, kp_scale=args.kp_scale, geofence=fence, allow_active=args.active,
+    cfg = rn.Config(mount=args.mount, kp_scale=args.kp_scale, geofence=fence, allow_active=args.active, speed=getattr(args, 'speed', None),
                     upper_filter=args.upper_filter, upper_alpha=args.upper_alpha, upper_cutoff_hz=args.upper_cutoff_hz,
                     upper_rate=args.upper_rate)
     ex = rn.Executor(contract, kin, infer, FieldPlanner(scene), worker, cfg)

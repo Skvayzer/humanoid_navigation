@@ -78,6 +78,7 @@ class Config:
     upper_alpha: float = 0.5                # ema: weight of the new target
     upper_cutoff_hz: float = 6.0            # butter2: 2nd-order Butterworth low-pass cutoff
     upper_rate: float = 0.5                 # rate: slew limit of the commanded target, rad/s
+    speed: Optional[float] = None           # operator speed, m/s (only for policies trained with it: contract 'command')
     goal_fence_margin_m: float = 0.3        # an operator goal must lie this far inside the geofence
     hold_goal_tolerance_m: float = 0.5      # 'balance' starts the policy only on hold fields solved this close to here
     limits: Limits = field(default_factory=Limits)
@@ -93,7 +94,7 @@ class Executor:
         self.cfg = config or Config()
         self.clock = clock
         self.chain = PelvisChain(kinematics, self.cfg.mount)
-        self.builder = ObservationBuilder(contract, kinematics)
+        self.builder = ObservationBuilder(contract, kinematics, speed=self.cfg.speed)
         self.damp_kd = np.asarray(self.cfg.damp_kd if self.cfg.damp_kd is not None else 2 * contract['kd'], float)
         self.mode = IDLE
         self.reason = 'start'

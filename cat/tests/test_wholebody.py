@@ -128,12 +128,31 @@ class WholeBodyTest(unittest.TestCase):
         actions = session.run(None, {'obs': self.data['obs'].astype(np.float32)})[0]
         self.assertLess(float(np.abs(actions-self.data['action']).max()), 1e-5)
 
+    def test_operator_speed_command(self):
+        """command_from_fields with an operator speed reproduces task._operator_command (training), and without one the
+        original compute_cmd_from_rtf, on 400 recorded field samples (generate_operator_command_fixture.py)."""
+        from wholebody_core import COMMAND_SITES, command_from_fields
+        ref = np.load(Path(__file__).resolve().parent/'operator_command_reference.npz')
+        for gf, bf, speed, operator, legacy in zip(ref['gf'], ref['bf'], ref['speed'], ref['operator'], ref['legacy']):
+            got = command_from_fields(gf[1], gf[COMMAND_SITES], bf[COMMAND_SITES], speed=float(speed))
+            self.assertLess(float(np.abs(got-operator).max()), 1e-9)
+            self.assertLess(float(np.abs(command_from_fields(gf[1], gf[COMMAND_SITES], bf[COMMAND_SITES])-legacy).max()), 1e-9)
+
+    def test_operator_speed_restart(self):
+        """Original rule: a zero command latches the robot standing for good. Operator-speed rule: it walks again."""
+        from wholebody_core import update_phase
+        for restart, expect in ((False, 0.), (True, 1.)):
+            stop, phase, last = 100, np.array([0., np.pi]), np.array([1., .3, 0., 0.])
+            for command in [np.array([.75, .3, 0., 0.])]*5+[np.zeros(4)]*80+[np.array([.75, .3, 0., 0.])]*5:
+                last, stop, phase, _ = update_phase(command, last, stop, phase, .18, .6, restart=restart)
+            self.assertEqual(float(last[0]), expect)
+
     def test_hand_protective_variants(self):
         """stationary_hands_*: same runtime contract as the main policy, own ONNX hash, reproduce their training actions."""
         import hashlib, json
         wholebody = Path(__file__).resolve().parents[1]/'wholebody'
         main = json.loads((wholebody/'policy_contract.json').read_text())
-        own = {'name', 'checkpoint_sha256', 'policy_onnx', 'robustness'}
+        own = {'name', 'checkpoint_sha256', 'policy_onnx', 'robustness', 'command'}
         try:
             import onnxruntime
         except ImportError:

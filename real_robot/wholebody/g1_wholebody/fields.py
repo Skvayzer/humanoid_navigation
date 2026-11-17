@@ -196,13 +196,13 @@ def compose(mode, scene, static, points, body, first, shape):
     return base, sdf, blocked, influence_box(idx, shape)
 
 
-def _apply_roi(out, roi, idx):
+def _apply_roi(out, roi, idx, first, goal):
     lo, hi = roi
     lo2, hi2 = np.maximum(lo - 2, 0), np.minimum(hi + 2, np.asarray(_SHAPE))
     sl2 = tuple(slice(a, b) for a, b in zip(lo2, hi2))
     base = out[4][sl2]
     sub = base if len(idx) == 0 else np.minimum(base, stamp_sdf(idx - lo2, base.shape))
-    gf, bf = mix_guidance(sub, out[3][sl2], sub < 0, DX)
+    gf, bf = mix_guidance(sub, out[3][sl2], sub < 0, DX, np.asarray(first, float) + lo2 * DX, goal)
     inner = tuple(slice(a - c, b - c) for a, b, c in zip(lo, hi, lo2))
     sl = tuple(slice(a, b) for a, b in zip(lo, hi))
     out[0][sl] = sub[inner]; out[1][sl] = gf[inner]; out[2][sl] = bf[inner]
@@ -237,7 +237,7 @@ def _worker(requests, results, names, scene_spec, scene_kwargs, static_path):
                     raise ValueError('no free space')
                 out = views[slot]
                 g = goal_gradient(blocked, first, DX, goal)
-                gf, bf = mix_guidance(sdf, g, blocked, DX)
+                gf, bf = mix_guidance(sdf, g, blocked, DX, first, goal)
                 out[0][...] = sdf; out[1][...] = gf; out[2][...] = bf; out[3][...] = g; out[4][...] = base
             else:                                           # 'refresh': same window and geodesic, fresh lidar (fast)
                 _, _, src, slot, first, goal, src_box, points, body = req
@@ -248,7 +248,7 @@ def _worker(requests, results, names, scene_spec, scene_kwargs, static_path):
                 box = influence_box(idx, _SHAPE)
                 roi = union_box(box, None if src_box is None else (np.asarray(src_box[0]), np.asarray(src_box[1])))
                 if roi is not None:
-                    _apply_roi(out, roi, idx)
+                    _apply_roi(out, roi, idx, first, goal)
             box = None if box is None else (box[0].tolist(), box[1].tolist())
             results.put((kind, seq, slot, list(map(float, first)), DX, list(map(float, goal)), box, time.monotonic() - t, None))
         except Exception as exc:  # reported, never silently stale: the control side ages the old fields out

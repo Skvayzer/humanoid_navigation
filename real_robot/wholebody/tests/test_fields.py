@@ -102,6 +102,21 @@ class FieldsTest(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_guidance_speed_profile_stops_as_training(self):
+        """Training's guidance magnitude (pf_modular): 0.6 away from the goal, (d/0.3)^3 slow-down inside 0.3 m, so the
+        undelayed command falls under 0.2 (stop latch) ~0.26 m from the goal."""
+        from wholebody_core import command_from_fields
+        shape = (40, 20, 38); first = np.array([-.8, -.4, DX / 2]); goal = np.array([.6, 0., .75])
+        grid = training_fields(np.zeros(shape, bool), first, DX, goal)
+        along = np.array([[x, 0., .75] for x in np.arange(-.6, .6, .02)])
+        gf, bf, _ = grid.sample(along)
+        mag = np.linalg.norm(gf, axis=1); d = goal[0] - along[:, 0]
+        self.assertTrue(np.allclose(mag[d > .4], .6, atol=.02))
+        moving = [np.linalg.norm(command_from_fields(gf[i], gf[[i, i, i, i, i]], bf[[i, i, i, i, i]])) > 0 for i in range(len(along))]
+        stop_at = d[np.flatnonzero(~np.array(moving))[0]]
+        self.assertGreater(stop_at, .22); self.assertLess(stop_at, .30)
+
+
 
 if __name__ == '__main__':
     unittest.main()

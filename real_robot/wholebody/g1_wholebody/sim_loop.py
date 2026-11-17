@@ -81,7 +81,7 @@ def gantry_schedule(t_go=11.0):
 def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0, 0.5, 0.4), seconds=40.,
         procedure='gantry', pose_hz=10., pose_latency_s=0.06, pose_noise=0.01, action_latency_s=0.010,
         field_latency_s=2.5, field_period_s=1.0, motor_kp_scale=0.9, true_mount='unitree_urdf', exec_mount='unitree_urdf',
-        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True, upper_filter='none', upper_alpha=0.5, upper_cutoff_hz=6.0, upper_rate=0.5, field_workers=1):
+        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True, upper_filter='none', upper_alpha=0.5, upper_cutoff_hz=6.0, upper_rate=0.5, field_workers=1, stop_at_goal=True):
     contract = load_contract(); kin = FastKinematics(contract)
     clock = SimClock()
     scene_obj = VirtualScene(scene, anchor=anchor)
@@ -118,6 +118,8 @@ def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0
                 ok = ex.command(value); log['transitions'].append((round(now, 2), 'cmd ' + value, ok, ex.reason))
             elif kind == 'rope' and robot.gantry is not None:
                 robot.gantry['length'] = HANG_LENGTH + value if value < 1 else 10.
+            elif kind == 'goal':                    # operator goal (viewer's pose tool), map frame x, y
+                ok = ex.set_goal(np.asarray(value, float)); log['transitions'].append((round(now, 2), 'goal %s' % (value,), ok, ex.reason))
             elif kind == 'buttons':
                 robot.buttons = tuple(value)
             elif kind == 'sticks':                  # (lx, ly, rx, ry) of the remote
@@ -158,6 +160,9 @@ def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0
                 robot.time += contract['physics_dt']; continue
             robot.step()
         pos, quat = robot.pelvis
+        if k % 5 == 0:
+            log.setdefault('track', []).append((round(now, 2), float(pos[0]), float(pos[1]),
+                                                int(ex.builder.stop) if ex.builder_ready else -1))
         log['min_z'] = min(log['min_z'], float(pos[2]))
         if ex.mode == rn.POLICY:
             sites = kin.world_sites(robot.data.qpos[7:].copy(), pos, quat)
@@ -177,7 +182,7 @@ def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0
             log.pop('hold_from', None)
         if renderer is not None and k % 2 == 0:
             renderer.update_scene(robot.data, cam); frames.append(renderer.render().copy())
-        if planner.reached and ex.mode == rn.POLICY and np.linalg.norm(robot.data.qvel[:2]) < .05 and now > 1.:
+        if stop_at_goal and planner.reached and ex.mode == rn.POLICY and np.linalg.norm(robot.data.qvel[:2]) < .05 and now > 1.:
             break
         if log['fell']:
             break
@@ -189,7 +194,7 @@ def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0
                   max_step_ms=round(log['max_step_ms'], 2), field_solves=fields.solves, bad_crc=robot.bad_crc,
                   hold_drift_m=round(log.get('hold_drift', 0.), 3),
                   policy_wait_s=round(log.get('wait_steps', 0) * contract['control_dt'], 2),
-                  transitions=log['transitions'],
+                  transitions=log['transitions'], track=log.get('track', []),
                   settings=dict(pose_hz=pose_hz, pose_latency_s=pose_latency_s, pose_noise=pose_noise, action_latency_s=action_latency_s,
                                 field_latency_s=field_latency_s, motor_kp_scale=motor_kp_scale, true_mount=true_mount,
                                 exec_mount=exec_mount, anchor=list(anchor), seed=seed))

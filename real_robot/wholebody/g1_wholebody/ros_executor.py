@@ -73,7 +73,7 @@ def parse(argv=None):
                    help='> 0: points this close to a palm are part of the robot too (an object held in the hand)')
     p.add_argument('--no-dynamic', action='store_true', help="with --static-map: obstacles = the map only, no lidar layer")
     p.add_argument('--static-map', help="static ESDF npz (esdf_layers) of the room: 'real' / 'both' = this map + the lidar's last 0.5 s")
-    p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'median3', 'ema', 'butter2', 'rate'),
+    p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'avg4', 'median3', 'ema', 'butter2', 'rate'),
                    help="waist/arm command filter (policy dithering); default: the policy contract's 'upper_filter' (the one it was trained with), else none")
     p.add_argument('--upper-alpha', type=float, default=0.5, help='ema: weight of the new target')
     p.add_argument('--upper-cutoff-hz', type=float, default=6.0, help='butter2: cutoff')

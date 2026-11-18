@@ -232,7 +232,7 @@ def main():
     p.add_argument('--physical', action='store_true'); p.add_argument('--video'); p.add_argument('--assets'); p.add_argument('--out')
     p.add_argument('--speed', type=float, help='operator speed (m/s), for policies trained with one')
     p.add_argument('--goal-seed', choices=('ball', 'column'), help='default: the policy contract\'s')
-    p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'median3', 'ema', 'butter2', 'rate'), help='default: the policy contract\'s')
+    p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'avg4', 'median3', 'ema', 'butter2', 'rate'), help='default: the policy contract\'s')
     a = p.parse_args()
     t = time.time()
     r = run(a.scene, a.policy, tuple(a.anchor), a.seconds, a.procedure, a.pose_hz, a.pose_latency, a.pose_noise,

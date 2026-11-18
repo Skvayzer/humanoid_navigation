@@ -74,7 +74,7 @@ class Config:
     joy_update_m: float = 0.10              # re-plan when the wanted goal moved this much
     remote_hold_s: float = 0.5
     prefetch_radius_m: float = 2.0          # request the next waypoint's fields this far before the switch
-    upper_filter: str = 'none'              # waist + arms command filter: none | avg2 | avg3 | median3 | ema | butter2 | rate
+    upper_filter: str = 'none'              # waist + arms command filter: none | avg2 | avg3 | avg4 | median3 | ema | butter2 | rate
     upper_alpha: float = 0.5                # ema: weight of the new target
     upper_cutoff_hz: float = 6.0            # butter2: 2nd-order Butterworth low-pass cutoff
     upper_rate: float = 0.5                 # rate: slew limit of the commanded target, rad/s
@@ -560,10 +560,12 @@ class Executor:
             return raw
         u, st, out = raw[12:].copy(), self.upper_state, raw.copy()
         if st is None:
-            st = self.upper_state = dict(raw=[u, u], out=[u, u], last=u)
+            st = self.upper_state = dict(raw=[u, u, u], out=[u, u], last=u)
         dt = self.c['control_dt']
         if kind == 'avg2':                          # FIR zero at 25 Hz: cancels a step-to-step flip exactly
             y = 0.5 * (u + st['raw'][0])
+        elif kind == 'avg4':                        # avg2 + a zero at 12.5 Hz (period-4 cycle seen on the robot with V7)
+            y = (u + st['raw'][0] + st['raw'][1] + st['raw'][2]) / 4.0
         elif kind == 'avg3':
             y = (u + st['raw'][0] + st['raw'][1]) / 3.0
         elif kind == 'median3':                     # keeps steps, drops single-step spikes
@@ -579,7 +581,7 @@ class Executor:
             y = st['out'][0] + np.clip(u - st['out'][0], -step, step)
         else:
             raise Fault('unknown upper_filter %s' % kind)
-        st['raw'] = [u, st['raw'][0]]; st['out'] = [y, st['out'][0]]
+        st['raw'] = [u, st['raw'][0], st['raw'][1]]; st['out'] = [y, st['out'][0]]
         out[12:] = y
         return out
 

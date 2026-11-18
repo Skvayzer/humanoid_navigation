@@ -25,6 +25,10 @@ for k in [k for k in cfg if k.startswith('Publish!') or k.startswith('GlobalVari
 cfg[ESDF_ID] = dict(variable=slider.get('globalVariableName', 'esdf_z'), min=props.get('min', 0.02), max=props.get('max', 1.5),
                     step=props.get('step', 0.04))
 cfg[CONTROLS_ID] = dict(scenes=scenes, speedMin=0.1, speedMax=0.6, speedStep=0.05)
+# the lidar the fields use: 0.10-1.40 m, no gantry-rope column (executor /g1_wb/obstacles_band), coloured by height
+cfg['3D!wb'].setdefault('topics', {})['/g1_wb/obstacles_band'] = dict(
+    visible=True, pointSize=4, pointShape='square', decayTime=0, colorField='intensity', colorMode='colormap',
+    colorMap='turbo', minValue=0.1, maxValue=1.4, explicitAlpha=0.9)
 
 
 def leaves(node):

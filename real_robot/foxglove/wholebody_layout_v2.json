@@ -239,6 +239,18 @@
      "decayTime": 2.5,
      "colorMode": "flat",
      "flatColor": "#ff3df5ff"
+    },
+    "/g1_wb/obstacles_band": {
+     "visible": true,
+     "pointSize": 4,
+     "pointShape": "square",
+     "decayTime": 0,
+     "colorField": "intensity",
+     "colorMode": "colormap",
+     "colorMap": "turbo",
+     "minValue": 0.1,
+     "maxValue": 1.4,
+     "explicitAlpha": 0.9
     }
    },
    "layers": {

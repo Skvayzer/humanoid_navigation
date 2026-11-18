@@ -26,7 +26,8 @@ DYN_RADIUS_M = 0.52            # dynamic distance truncation (just above the pol
 STATIC_MATCH_M = 0.08          # a lidar voxel this close to the base layer's surface is the base layer (localisation error)
 BODY_RADIUS_M = 0.12           # around each limb segment / field site
 TRUNK_RADIUS_M = 0.20          # pelvis-torso segment
-ROPE_RADIUS_M, ROPE_FROM_Z = 0.30, 1.00     # gantry rope: a column above the pelvis
+ROPE_RADIUS_M, ROPE_FROM_Z = 0.50, 1.00     # gantry rope and harness: a column above the pelvis (0.30 m left the swinging
+                                            # ropes at head height in, 2026-11-18); executor --rope-radius
 STAMP_MAX_VOXELS = 3000        # more dynamic voxels than this are stamped from 8 cm centres (marked occupied at 4 cm)
 FREE_SDF = float(np.linalg.norm(np.array(WINDOW) * DX))     # training's sdf of an empty window
 
@@ -105,7 +106,7 @@ class StaticEsdf:
 
 
 # ------------------------------------------------------------------------------------------------ the robot itself
-def body_capsules(kin, q, pos, quat):
+def body_capsules(kin, q, pos, quat, rope_radius=ROPE_RADIUS_M):
     """Segments (a, b) and radii covering the robot (limb segments between body origins, the field sites) and the
     gantry rope above it, in the map frame: lidar points inside them are not obstacles."""
     from wholebody_core import quat_matrix
@@ -121,7 +122,7 @@ def body_capsules(kin, q, pos, quat):
     for t in sites.values():
         p = at(t); a.append(p); b.append(p); r.append(BODY_RADIUS_M)
     p = np.asarray(pos, float)
-    a.append(np.r_[p[:2], ROPE_FROM_Z]); b.append(np.r_[p[:2], 5.]); r.append(ROPE_RADIUS_M)
+    a.append(np.r_[p[:2], ROPE_FROM_Z]); b.append(np.r_[p[:2], 5.]); r.append(rope_radius)
     return np.array(a), np.array(b), np.array(r)
 
 
@@ -263,7 +264,8 @@ def remove_body(points, body):
         keep = ~body_surface().inside(p, body, body.get('grip', 0.), body.get('sweep', SCAN_SWEEP_S))
         rope = body.get('rope')
         if rope is not None:                                                  # gantry rope: a column above the pelvis
-            keep &= ~((np.linalg.norm(p[:, :2] - np.asarray(rope)[:2], axis=1) < ROPE_RADIUS_M) & (p[:, 2] > ROPE_FROM_Z))
+            keep &= ~((np.linalg.norm(p[:, :2] - np.asarray(rope)[:2], axis=1) < body.get('rope_radius', ROPE_RADIUS_M))
+                      & (p[:, 2] > ROPE_FROM_Z))
         return p[keep]
     a, b, r = body
     p = np.asarray(points)

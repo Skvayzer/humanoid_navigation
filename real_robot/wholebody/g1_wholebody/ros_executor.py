@@ -63,6 +63,8 @@ def parse(argv=None):
     p.add_argument('--field-workers', type=int, default=2, help='solver processes (joystick mode solves this many goals at once)')
     p.add_argument('--self-filter', choices=('mesh', 'capsules'), default='mesh',
                    help="lidar points of the robot itself: the meshes posed at each point's scan time, or the old capsules")
+    p.add_argument('--rope-radius', type=float, default=0.5,
+                   help='lidar points above 1 m within this of the pelvis axis are the gantry rope / harness, not obstacles')
     p.add_argument('--grip-radius', type=float, default=0.,
                    help='> 0: points this close to a palm are part of the robot too (an object held in the hand)')
     p.add_argument('--no-dynamic', action='store_true', help="with --static-map: obstacles = the map only, no lidar layer")
@@ -193,6 +195,7 @@ class Bridge:
         self.status = self.node.create_publisher(String, '/g1_wb/status', 5)
         self.scene_pub = self.node.create_publisher(MarkerArray, '/g1_wb/virtual_scene', latched)
         self.slice_pub = self.node.create_publisher(PointCloud2, '/g1_wb/sdf_slice', 1)
+        self.band_pub = self.node.create_publisher(PointCloud2, '/g1_wb/obstacles_band', 1)   # the lidar the fields use
         from sensor_msgs.msg import Image
         self.Image = Image
         self.cube_pub = self.node.create_publisher(Image, '/g1_wb/esdf_cube', 1)   # the whole window, for the viewer's slider
@@ -385,6 +388,18 @@ class Bridge:
         m.data = array.array('B', q.tobytes())
         self.cube_pub.publish(m)
 
+    def publish_band(self, rope_xy, rope_radius):
+        """/g1_slam/obstacles as the fields take it (before the body filter): map frame, 0.10-1.40 m (no floor, no
+        ceiling), without the gantry-rope column; z doubles as intensity for the viewer."""
+        pts = self.obstacle_points()
+        if pts is None:
+            return
+        from .esdf_layers import REAL_Z, ROPE_FROM_Z
+        p = pts[(pts[:, 2] > REAL_Z[0]) & (pts[:, 2] < REAL_Z[1])]
+        if rope_xy is not None:
+            p = p[~((np.linalg.norm(p[:, :2] - np.asarray(rope_xy)[:2], axis=1) < rope_radius) & (p[:, 2] > ROPE_FROM_Z))]
+        self.band_pub.publish(self._cloud([p[:, 0], p[:, 1], p[:, 2], p[:, 2]], ('x', 'y', 'z', 'intensity')))
+
     def publish_slice(self, fields):
         k = int(np.clip(round((GOAL_Z - fields.origin[2]) / fields.dx), 0, fields.sdf.shape[2] - 1))
         nx, ny = fields.sdf.shape[:2]
@@ -475,12 +490,12 @@ def main(argv=None):
     def body_now():
         if args.self_filter == 'capsules':
             pelvis = ex._pelvis(ex.state) if ex.state is not None else None
-            return None if pelvis is None else body_capsules(kin, ex.state.q, pelvis[0], pelvis[1])
+            return None if pelvis is None else body_capsules(kin, ex.state.q, pelvis[0], pelvis[1], args.rope_radius)
         if not history:
             return None
         h = list(history)
         return dict(t=np.array([x[0] for x in h]), q=np.array([x[1] for x in h]), pos=np.array([x[2] for x in h]),
-                    quat=np.array([x[3] for x in h]), grip=args.grip_radius, rope=h[-1][2])
+                    quat=np.array([x[3] for x in h]), grip=args.grip_radius, rope=h[-1][2], rope_radius=args.rope_radius)
     worker.body_source = body_now
     world = dict(scene=scene, scenes=available_scenes())
 
@@ -625,6 +640,8 @@ def main(argv=None):
             if n % 50 == 25 and ex.fields is not None and ex.fields is not last_slice:
                 last_slice = ex.fields
                 bridge.publish_slice(ex.fields)
+            if n % 25 == 7:                                                                # 2 Hz: the lidar the fields use
+                bridge.publish_band(history[-1][2] if history else None, args.rope_radius)
             if n % 25 == 12 and ex.fields is not None and ex.fields is not last_cube:     # 2 Hz, only new fields
                 last_cube = ex.fields
                 bridge.publish_cube(ex.fields)

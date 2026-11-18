@@ -179,7 +179,7 @@ class WholeBodyTest(unittest.TestCase):
         import hashlib, json
         wholebody = Path(__file__).resolve().parents[1]/'wholebody'
         main = json.loads((wholebody/'policy_contract.json').read_text())
-        own = {'name', 'checkpoint_sha256', 'policy_onnx', 'robustness', 'command', 'goal_seed'}
+        own = {'name', 'checkpoint_sha256', 'policy_onnx', 'robustness', 'command', 'goal_seed', 'upper_filter'}
         try:
             import onnxruntime
         except ImportError:

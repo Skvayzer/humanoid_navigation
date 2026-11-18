@@ -13,6 +13,10 @@ E2 u300 → V5 u100 → V6 u100 → V7, 100 updates (training continues; later s
 python -m g1_wholebody.ros_executor --policy stationary_hands_V7_u100 --speed 0.15 ...
 ```
 
+The contract also records `upper_filter: avg2`: V7 was trained with the waist/arm motors tracking the mean of the
+last two targets (`--upper-target-average`), so the executor applies the same `avg2` filter unless `--upper-filter`
+says otherwise (it warns when that differs from training). Do not run it with the `ema 0.3` filter used for u150.
+
 ## What it does (robot-side simulator, solid walls, told 0.15 m/s unless stated)
 
 | Test | V7 u100 | V6 u100 (before) |
@@ -44,7 +48,7 @@ evaluated under the training noise**: the numbers above are deterministic, noise
 ## Provenance
 
 `policy_contract.json` differs from `../policy_contract.json` only in `name`, `checkpoint_sha256`, `policy_onnx`,
-`robustness`, `command` (operator speed 0.1-0.6 m/s) and `goal_seed` (column); `cat/tests/test_wholebody.py` checks
+`robustness`, `command` (operator speed 0.1-0.6 m/s), `goal_seed` (column) and `upper_filter` (avg2); `cat/tests/test_wholebody.py` checks
 that, the ONNX hash, and that the ONNX reproduces the training actor on `reference_actions.npz` (320 steps; max error
 6.6e-7). Made with `cat/tests/ship_wholebody_variant.py --same-runtime-as hands_E2_u300 --operator-speed 0.1 0.6` from
 the training repository's deploy bundle `outputs/deploy/slow_V7_u100/` (Click-and-Traverse-Mjlab, branch

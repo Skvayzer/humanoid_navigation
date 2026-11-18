@@ -582,5 +582,6 @@
   "nominal_m_s": 0.525,
   "note": "field direction at the operator speed (executor --speed), no stop latch; wholebody_core.command_from_fields(speed=...) = task._operator_command"
  },
- "goal_seed": "column"
+ "goal_seed": "column",
+ "upper_filter": "avg2"
 }

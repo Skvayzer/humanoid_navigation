@@ -55,7 +55,7 @@ def training_fields(blocked, first_center, dx, goal, goal_seed='ball'):
 
 def goal_gradient(blocked, first_center, dx, goal, goal_seed='ball'):
     """Raw guidance before the boundary blending: -grad of the geodesic distance to the goal seed (the slow part).
-    Depends on the occupancy and the goal only, so it can be reused while the sdf near it is refreshed."""
+    Depends on the occupancy, the goal and the goal seed only, so it can be reused while the sdf near it is refreshed."""
     if goal_seed not in GOAL_SEEDS:
         raise ValueError(f"goal_seed must be one of {GOAL_SEEDS}, got {goal_seed!r}")
     origin = np.asarray(first_center, dtype=float); goal = np.asarray(goal, dtype=float)

@@ -99,6 +99,9 @@ def main():
                                         'wholebody_core.command_from_fields(speed=...) = task._operator_command')
     if args.goal_seed != 'ball':
         contract['goal_seed'] = args.goal_seed
+    if (spec.get('environment_config') or {}).get('upper_target_average'):
+        # trained with the waist/arm motors tracking the mean of the last two targets: the executor's 'avg2' filter
+        contract['upper_filter'] = 'avg2'
     out.mkdir(parents=True)
     shutil.copyfile(args.bundle/'policy.onnx', out/'policy.onnx')
     (out/'policy_contract.json').write_text(json.dumps(contract, indent=1)+'\n')

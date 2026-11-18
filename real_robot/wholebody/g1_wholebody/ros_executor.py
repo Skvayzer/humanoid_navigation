@@ -72,7 +72,8 @@ def parse(argv=None):
                    help='> 0: points this close to a palm are part of the robot too (an object held in the hand)')
     p.add_argument('--no-dynamic', action='store_true', help="with --static-map: obstacles = the map only, no lidar layer")
     p.add_argument('--static-map', help="static ESDF npz (esdf_layers) of the room: 'real' / 'both' = this map + the lidar's last 0.5 s")
-    p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'median3', 'ema', 'butter2', 'rate'), default='none', help='waist/arm command filter (policy dithering)')
+    p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'median3', 'ema', 'butter2', 'rate'),
+                   help="waist/arm command filter (policy dithering); default: the policy contract's 'upper_filter' (the one it was trained with), else none")
     p.add_argument('--upper-alpha', type=float, default=0.5, help='ema: weight of the new target')
     p.add_argument('--upper-cutoff-hz', type=float, default=6.0, help='butter2: cutoff')
     p.add_argument('--upper-rate', type=float, default=0.5, help='rate: slew limit, rad/s')
@@ -442,6 +443,9 @@ def main(argv=None):
     onnx_path, contract_path = policy_paths(args.policy)
     contract = load_contract(contract_path); kin = FastKinematics(contract)
     args.speed = checked_speed(contract, args.speed)
+    trained_filter = contract.get('upper_filter', 'none'); args.upper_filter = args.upper_filter or trained_filter
+    filter_note = None if args.upper_filter == trained_filter else \
+        'upper filter %s, but this policy was trained with %s' % (args.upper_filter, trained_filter)
     import onnxruntime as ort
     opts = ort.SessionOptions(); opts.intra_op_num_threads = 1; opts.inter_op_num_threads = 1
     session = ort.InferenceSession(str(onnx_path), opts, providers=['CPUExecutionProvider'])
@@ -451,6 +455,8 @@ def main(argv=None):
     rclpy.init()
     bridge = Bridge(args, contract)
     log = bridge.node.get_logger()
+    if filter_note:
+        log.warning(filter_note)
     log.info('policy %s (%s), scene %s, mount %s, %s' % (args.policy, onnx_path, args.scene, args.mount,
              'ACTIVE: motor output allowed' if args.active else 'PASSIVE: /lowcmd publisher not created'))
 

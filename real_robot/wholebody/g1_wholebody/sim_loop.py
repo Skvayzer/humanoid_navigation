@@ -40,8 +40,9 @@ class DelayedFields:
     does: the control step never pays for the solve); service() solves outside the timed step; poll() delivers
     the result field_latency after the request."""
 
-    def __init__(self, scene, latency_s, clock, n=1):
+    def __init__(self, scene, latency_s, clock, n=1, goal_seed='ball'):
         self.scene, self.latency, self.clock = scene, latency_s, clock
+        self.goal_seed = goal_seed
         self.n, self.max_pending = n, 1                 # as FieldWorker: up to n solves at once in joystick mode
         self.queued, self.ready = [], []; self.solves = 0
 
@@ -53,7 +54,7 @@ class DelayedFields:
 
     def service(self):
         for t, xy, goal in self.queued:
-            fields, used = solve_fields(xy, goal, self.scene.occupancy)
+            fields, used = solve_fields(xy, goal, self.scene.occupancy, goal_seed=self.goal_seed)
             self.ready.append((t + self.latency, fields, used)); self.solves += 1
         self.queued = []
 
@@ -81,16 +82,16 @@ def gantry_schedule(t_go=11.0):
 def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0, 0.5, 0.4), seconds=40.,
         procedure='gantry', pose_hz=10., pose_latency_s=0.06, pose_noise=0.01, action_latency_s=0.010,
         field_latency_s=2.5, field_period_s=1.0, motor_kp_scale=0.9, true_mount='unitree_urdf', exec_mount='unitree_urdf',
-        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True, upper_filter='none', upper_alpha=0.5, upper_cutoff_hz=6.0, upper_rate=0.5, field_workers=1, stop_at_goal=True, record=None):
+        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True, upper_filter='none', upper_alpha=0.5, upper_cutoff_hz=6.0, upper_rate=0.5, field_workers=1, goal_seed=None, stop_at_goal=True, record=None, speed=None):
     contract = load_contract(); kin = FastKinematics(contract)
     clock = SimClock()
     scene_obj = VirtualScene(scene, anchor=anchor)
     planner = FieldPlanner(scene_obj, period=field_period_s)
-    fields = DelayedFields(scene_obj, field_latency_s, clock, n=field_workers)
+    fields = DelayedFields(scene_obj, field_latency_s, clock, n=field_workers, goal_seed=goal_seed or contract.get('goal_seed', 'ball'))
     xs = [scene_obj.start[0], scene_obj.goal[0]] + [b['center'][0] for b in scene_obj.boxes]
     ys = [scene_obj.start[1], scene_obj.goal[1]] + [b['center'][1] for b in scene_obj.boxes]
     fence = (min(xs) - fence_margin, max(xs) + fence_margin, min(ys) - fence_margin, max(ys) + fence_margin)
-    cfg = rn.Config(mount=exec_mount, allow_active=True, geofence=fence, imu_heading=imu_heading, upper_filter=upper_filter,
+    cfg = rn.Config(mount=exec_mount, allow_active=True, geofence=fence, imu_heading=imu_heading, upper_filter=upper_filter, speed=speed,
                     upper_alpha=upper_alpha, upper_cutoff_hz=upper_cutoff_hz, upper_rate=upper_rate)
     ex = rn.Executor(contract, kin, make_session(policy), planner, fields, cfg, clock=clock)
     hang = None

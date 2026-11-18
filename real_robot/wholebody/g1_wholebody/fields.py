@@ -131,9 +131,9 @@ def window_request(base_xy, goal_xy, occupancy):
     return first, occ, goal
 
 
-def solve_fields(base_xy, goal_xy, occupancy):
+def solve_fields(base_xy, goal_xy, occupancy, goal_seed='ball'):
     first, occ, goal = window_request(base_xy, goal_xy, occupancy)
-    return training_fields(occ, first, DX, goal), goal
+    return training_fields(occ, first, DX, goal, goal_seed=goal_seed), goal
 
 
 class FieldPlanner:
@@ -208,7 +208,7 @@ def _apply_roi(out, roi, idx, first, goal):
     out[0][sl] = sub[inner]; out[1][sl] = gf[inner]; out[2][sl] = bf[inner]
 
 
-def _worker(requests, results, names, scene_spec, scene_kwargs, static_path):
+def _worker(requests, results, names, scene_spec, scene_kwargs, static_path, goal_seed='ball'):
     scene, mode = VirtualScene(scene_spec, **scene_kwargs), 'virtual'
     static = StaticEsdf(static_path) if static_path else None
     blocks = [shared_memory.SharedMemory(name=n) for n in names]
@@ -236,7 +236,7 @@ def _worker(requests, results, names, scene_spec, scene_kwargs, static_path):
                 if blocked.all():
                     raise ValueError('no free space')
                 out = views[slot]
-                g = goal_gradient(blocked, first, DX, goal)
+                g = goal_gradient(blocked, first, DX, goal, goal_seed)
                 gf, bf = mix_guidance(sdf, g, blocked, DX, first, goal)
                 out[0][...] = sdf; out[1][...] = gf; out[2][...] = bf; out[3][...] = g; out[4][...] = base
             else:                                           # 'refresh': same window and geodesic, fresh lidar (fast)
@@ -278,8 +278,9 @@ class FieldWorker:
 
     REFRESH_PERIOD_S = 0.1
 
-    def __init__(self, scene, n=1, static=None, dynamic=True, **scene_kwargs):
+    def __init__(self, scene, n=1, static=None, dynamic=True, goal_seed='ball', **scene_kwargs):
         ctx = mp.get_context('spawn')                   # no fork of a process that has DDS threads
+        self.goal_seed = goal_seed                      # the policy's training seed (contract "goal_seed": ball | column)
         self.n = max(1, int(n)); self.max_pending = 1
         self.blocks = [shared_memory.SharedMemory(create=True, size=_SLOT_BYTES) for _ in range(self.n + 5)]
         self.views = [_views(b.buf) for b in self.blocks]
@@ -295,7 +296,8 @@ class FieldWorker:
         if self.static_path:
             StaticEsdf(self.static_path)                # fail here, not in the workers
         self.processes = [ctx.Process(target=_worker, daemon=True,
-                                      args=(q, self.results, [b.name for b in self.blocks], spec, scene_kwargs, self.static_path))
+                                      args=(q, self.results, [b.name for b in self.blocks], spec, scene_kwargs, self.static_path,
+                                            goal_seed))
                           for q in self.queues]
         for pr in self.processes:
             pr.start()

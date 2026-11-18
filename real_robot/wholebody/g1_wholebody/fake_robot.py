@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from wholebody_core import WHOLEBODY, quat_matrix
+from wholebody_core import WHOLEBODY, enable_obstacle_contacts, quat_matrix
 from .frames import PelvisChain, pose_matrix, yaw_matrix, matrix_quat
 from .lowlevel import LowCmd, LowState, NUM_BODY, crc_of_packed, remote_bytes
 
@@ -39,8 +39,7 @@ class FakeG1:
         self.model = mujoco.MjModel.from_xml_string(xml)
         self.model.opt.timestep = contract['physics_dt']
         if physical:
-            robot = self.model.geom_bodyid > 0
-            self.model.geom_contype[robot & (self.model.geom_contype == 0)] = 2
+            enable_obstacle_contacts(self.model)
         self.data = mujoco.MjData(self.model)
         actuated = [self.model.actuator(i).trnid[0] for i in range(self.model.nu)]
         if [self.model.joint(j).name for j in actuated] != list(contract['joint_order']):

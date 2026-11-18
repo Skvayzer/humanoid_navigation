@@ -25,7 +25,7 @@ RUN if [ "$(uname -m)" = aarch64 ]; then \
 COPY --from=builder /ws/install /opt/wb/messages
 COPY cat/state_core.py cat/perception_core.py cat/wholebody_core.py cat/wholebody_fields.py cat/wholebody_sim.py /opt/wb/cat/
 COPY cat/wholebody /opt/wb/cat/wholebody
-COPY cat/tests/test_wholebody.py cat/tests/wholebody_reference.npz /opt/wb/cat/tests/
+COPY cat/tests/test_wholebody.py cat/tests/wholebody_reference.npz cat/tests/operator_command_reference.npz /opt/wb/cat/tests/
 COPY real_robot/wholebody/g1_wholebody /opt/wb/g1_wholebody
 COPY real_robot/wholebody/tests /opt/wb/tests
 COPY third_party/unitree_sdk2_python/unitree_sdk2py/utils/lib/crc_amd64.so third_party/unitree_sdk2_python/unitree_sdk2py/utils/lib/crc_aarch64.so /opt/wb/sdk_crc/

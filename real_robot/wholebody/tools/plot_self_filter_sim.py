@@ -93,6 +93,65 @@ def figure(scenario, d, i, view, lim, suptitle, path):
     print('wrote', path)
 
 
+CAPS_SHADE, MESH_SHADE = '#eb6834', '#2a78d6'                   # the filters' volumes, as in plot_self_filter_volume.py
+
+
+def problem_figure(d, i, path):
+    """The object at the right palm: each filter's removed volume (a 6 cm slab through the palm, side view) with the
+    object's voxels in it, kept or removed."""
+    from g1_wholebody import esdf_layers as L
+    w = window(d['pts'], d['t'][i]); rem, sites, frames = filters(w, i, d)
+    q, pos, quat = d['q'][i], d['pos'][i], d['quat'][i]
+    surf = L.body_surface(); kin = surf.kin; palm = surf.posed(q, pos, quat)[1][1]
+    half = .03; h = .01
+    xs = np.arange(palm[0] - .45, palm[0] + .45, h); zs = np.arange(palm[2] - .4, palm[2] + .35, h)
+    ys = np.arange(palm[1] - half, palm[1] + half + 1e-9, h)
+    G = np.stack(np.meshgrid(xs, ys, zs, indexing='ij'), -1).reshape(-1, 3)
+    ca, cb, cr = L.body_capsules(kin, q, pos, quat)                 # without the rope column (the same in both)
+    keep = L.remove_body(np.column_stack([G, np.arange(len(G))]), (ca[:-1], cb[:-1], cr[:-1]))[:, 3].astype(int)
+    vol = dict(capsules=np.ones(len(G), bool), mesh=surf.inside(G, dict(t=[0.], q=[q], pos=[pos], quat=[quat])))
+    vol['capsules'][keep] = False
+    shape = (len(xs), len(ys), len(zs))
+    body = body_cloud(frames, every=2); body = body[np.abs(body[:, 1] - palm[1]) < half]
+    lab = w[:, 4]; obj = (lab == S.MOVING) & (np.abs(w[:, 1] - palm[1]) < half + .02)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6.4), facecolor=SURFACE)
+    for ax, key, shade, title in ((axes[0], 'capsules', CAPS_SHADE, 'Before: capsules (12 cm round the arm)'),
+                                  (axes[1], 'mesh', MESH_SHADE, 'After: meshes (4 cm round the surface)')):
+        ax.set_facecolor(SURFACE)
+        v = vol[key].reshape(shape).any(1)
+        ax.imshow(np.where(v.T, 1., np.nan), origin='lower', extent=(xs[0] - h / 2, xs[-1] + h / 2, zs[0] - h / 2, zs[-1] + h / 2),
+                  cmap=matplotlib.colors.ListedColormap([shade]), alpha=.3, interpolation='nearest', zorder=0)
+        ax.scatter(body[:, 0], body[:, 2], s=1.5, c='#7d7c76', lw=0, zorder=1)
+        k = obj & ~rem[key]; r = obj & rem[key]
+        ax.scatter(w[k, 0], w[k, 2], s=46, marker='s', facecolor=INK, edgecolor='white', lw=1, zorder=3)
+        ax.scatter(w[r, 0], w[r, 2], s=52, marker='X', facecolor='white', edgecolor=INK, lw=1.1, zorder=3)
+        ax.scatter([palm[0]], [palm[2]], s=60, facecolor='white', edgecolor=INK, lw=1.4, zorder=4)
+        ax.annotate('right palm', (palm[0], palm[2]), xytext=(-70, -32), textcoords='offset points', color=MUTED, fontsize=9,
+                    arrowprops=dict(arrowstyle='-', color=MUTED, lw=.8))
+        ax.set_xlim(xs[0], xs[-1]); ax.set_ylim(zs[0], zs[-1]); ax.set_aspect('equal')
+        ax.set_title(title, color=INK, fontsize=12, loc='left', pad=22)
+        ax.text(0, 1.015, '%d of %d voxels of the object removed (it vanishes for the policy)' % (r.sum(), obj.sum())
+                if key == 'capsules' else '%d of %d voxels of the object removed (those within 4 cm of the hand and fingers)'
+                % (r.sum(), obj.sum()), transform=ax.transAxes, color=MUTED, fontsize=9.5, va='bottom')
+        ax.grid(color=GRID, lw=.6); ax.tick_params(colors=MUTED, labelsize=8)
+        for sp in ax.spines.values():
+            sp.set_color(GRID)
+        ax.set_xlabel('x [m]', color=MUTED, fontsize=9); ax.set_ylabel('z [m]', color=MUTED, fontsize=9)
+    handles = [plt.Rectangle((0, 0), 1, 1, color=CAPS_SHADE, alpha=.45), plt.Rectangle((0, 0), 1, 1, color=MESH_SHADE, alpha=.45),
+               plt.Line2D([], [], ls='', marker='s', ms=8, mfc=INK, mec='white'),
+               plt.Line2D([], [], ls='', marker='X', ms=8, mfc='white', mec=INK),
+               plt.Line2D([], [], ls='', marker='o', ms=3, color='#7d7c76')]
+    labels = ['capsule volume (dropped as the robot)', 'mesh volume (dropped as the robot)', 'object voxel, kept: the policy sees it',
+              'object voxel, removed', 'robot surface (model)']
+    fig.legend(handles, labels, loc='lower center', ncol=5, frameon=False, fontsize=9, labelcolor=INK)
+    fig.suptitle('Problem case for the capsules: a 12 cm cube centred 8 cm in front of the right palm (standing, t = %.1f s)' % d['t'][i],
+                 color=INK, fontsize=14, x=.02, ha='left', y=.985)
+    fig.text(.02, .935, 'Side view of a 6 cm slab through the palm; shaded: the volume each filter treats as the robot.',
+             color=MUTED, fontsize=9.5)
+    fig.tight_layout(rect=(0, .07, 1, .92)); fig.savefig(path, dpi=160, facecolor=SURFACE); plt.close(fig)
+    print('wrote', path)
+
+
 def main():
     out = Path(sys.argv[1])
     walk = dict(np.load(out / 'walk_lidar.npz')); stand = dict(np.load(out / 'stand_lidar.npz'))
@@ -108,10 +167,7 @@ def main():
     caps = [r for r in rows if r['filter'] == 'capsules' and 'approaching object_kept_near' in r and r['t'] > 16.]
     worst = min(caps, key=lambda r: r['approaching object_kept_near'])
     i = int(np.argmin(np.abs(stand['t'] - worst['t'])))
-    _, sites, _ = filters(window(stand['pts'], stand['t'][i]), i, stand); palm = sites[6]
-    figure('stand', stand, i, (0, 2), ((palm[0] - .45, palm[0] + .45), (palm[2] - .4, palm[2] + .35)),
-           'Problem case for the capsules: an object 8 cm from the right palm (standing, t = %.1f s), side view' % worst['t'],
-           out / 'capsules_problem_stand.png')
+    problem_figure(stand, i, out / 'capsules_problem_stand.png')
 
 
 if __name__ == '__main__':

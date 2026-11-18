@@ -4,7 +4,8 @@
 Changes: the "G1 controls" panel gets the scenes with their geometry (a drop-down with top-view previews) and a short note
 each; the scene list is ordered simple -> hard; the ESDF slice script is woken by /tf, not odometry. Needs g1_panels/g1-wholebody-panels.foxe >= 1.1.0.
 
-  python3 make_layout_v3.py
+  python3 make_layout_v3.py [SRC OUT]      (default wholebody_layout_v2.1.json -> wholebody_layout_v3.json;
+                                           v3.2 = make_layout_v3.py wholebody_layout_v3.1.json wholebody_layout_v3.2.json)
 """
 import json
 from pathlib import Path
@@ -42,14 +43,15 @@ def scene(name):
                 boxes=[dict(c=r(b['center']), h=r(b['half_size']), yaw=round(float(b.get('yaw', 0.)), 4)) for b in d['boxes']])
 
 
-v3 = json.loads((HERE / 'wholebody_layout_v2.1.json').read_text())
+import sys
+SRC, OUT = (sys.argv[1:3] + ['wholebody_layout_v2.1.json', 'wholebody_layout_v3.json'][len(sys.argv[1:3]):])
+v3 = json.loads((HERE / SRC).read_text())
 names = [n for n in ORDER if any((d / (n + '.json')).exists() for d in SCENE_DIRS)]
 v3['configById'][CONTROLS_ID]['scenes'] = [scene(n) for n in names]
-# the ESDF slice script is woken by /tf (55 Hz, the 3D panel subscribes to it anyway) instead of /g1_slam/odometry
-# (50 Hz JSON through rosbridge only for that)
+# the ESDF slice script from esdf_slice.ts (single source): woken by /tf, reads the zlib cube (and raw mono8)
 for node in v3.get('userNodes', {}).values():
-    node['sourceCode'] = node['sourceCode'].replace('"/g1_slam/odometry"', '"/tf"').replace('Input<"/g1_slam/odometry">', 'Input<"/tf">') \
-        .replace('Odometry (50 Hz) only wakes the script', '/tf (~55 Hz) only wakes the script')
-(HERE / 'wholebody_layout_v3.json').write_text(json.dumps(v3, indent=1, ensure_ascii=False) + '\n')
+    if node.get('name') == 'esdf_slice':
+        node['sourceCode'] = (HERE / 'esdf_slice.ts').read_text()
+(HERE / OUT).write_text(json.dumps(v3, indent=1, ensure_ascii=False) + '\n')
 for s in v3['configById'][CONTROLS_ID]['scenes']:
     print('  %-22s %s' % (s['name'], s['note']))

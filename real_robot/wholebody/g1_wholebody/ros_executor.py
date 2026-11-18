@@ -20,6 +20,7 @@ import signal
 import struct
 import threading
 import time
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -203,6 +204,7 @@ class Bridge:
         from sensor_msgs.msg import Image
         self.Image = Image
         self.cube_pub = self.node.create_publisher(Image, '/g1_wb/esdf_cube', 1)   # the whole window, for the viewer's slider
+        self._cube_cv, self._cube_next, self._cube_thread = threading.Condition(), None, None
         self.pelvis_pub = self.node.create_publisher(PoseStamped, '/g1_wb/pelvis', 5)
         self.goal_pub = self.node.create_publisher(PoseStamped, '/g1_wb/goal', 1)
         self.sites_pub = self.node.create_publisher(PointCloud2, '/g1_wb/sites', 2)
@@ -379,18 +381,43 @@ class Bridge:
         self.sites_pub.publish(self._cloud([p[:, 0], p[:, 1], p[:, 2], np.asarray(sdf, float)], ('x', 'y', 'z', 'sdf')))
 
     CUBE_LO, CUBE_HI = -0.1, 0.6
+    CUBE_ENCODING = 'esdf-zlib-rowdelta'
 
     def publish_cube(self, fields):
-        """The policy's whole sdf window as mono8 (CUBE_LO..CUBE_HI m in 255 steps), layer after layer: height = nz * nx,
-        width = ny; frame_id = 'esdf <origin x y z> <dx> <nz> <lo> <hi>' (the viewer script cuts the slider's layer)."""
+        """The policy's whole sdf window for the viewer's slider: handed to a background thread (quantising and zlib take
+        ~20 ms on the Jetson; zlib releases the GIL), so the 50 Hz loop only stores a reference. A newer window replaces
+        one not yet sent."""
+        with self._cube_cv:
+            self._cube_next = fields; self._cube_cv.notify()
+        if self._cube_thread is None:
+            self._cube_thread = threading.Thread(target=self._cube_loop, name='esdf_cube', daemon=True); self._cube_thread.start()
+
+    def _cube_loop(self):
+        while True:
+            with self._cube_cv:
+                while self._cube_next is None:
+                    self._cube_cv.wait()
+                fields, self._cube_next = self._cube_next, None
+            try:
+                self.cube_pub.publish(self.cube_msg(fields))
+            except Exception as exc:  # the viewer's cube must never take the executor down
+                self.node.get_logger().warn('esdf cube: %r' % exc)
+
+    def cube_msg(self, fields):
+        """sensor_msgs/Image, encoding CUBE_ENCODING: the sdf as uint8 (CUBE_LO..CUBE_HI m in 255 steps), layer after layer
+        (height = nz * nx rows of width ny); each row as its byte differences (uint8, wrapping), the whole zlib level 1
+        (~3.4x smaller than raw: half the window is the 'far' plateau). frame_id = 'esdf <origin x y z> <dx> <nz> <lo>
+        <hi>'. The viewer script (foxglove/esdf_slice.ts) inflates it and cuts the slider's layer."""
         sdf = fields.sdf; nx, ny, nz = sdf.shape
         q = np.empty((nz, nx, ny), np.uint8)
         np.clip((np.moveaxis(sdf, 2, 0) - self.CUBE_LO) * (255. / (self.CUBE_HI - self.CUBE_LO)) + .5, 0, 255, out=q, casting='unsafe')
+        d = np.empty_like(q); d[..., 0] = q[..., 0]; np.subtract(q[..., 1:], q[..., :-1], out=d[..., 1:])
+        z = zlib.compress(d.tobytes(), 1)
         m = self.Image(); m.header.stamp = self.node.get_clock().now().to_msg()
         m.header.frame_id = 'esdf %.4f %.4f %.4f %.4f %d %.3f %.3f' % (*fields.origin, fields.dx, nz, self.CUBE_LO, self.CUBE_HI)
-        m.height, m.width, m.encoding, m.is_bigendian, m.step = nz * nx, ny, 'mono8', 0, ny
-        m.data = array.array('B', q.tobytes())
-        self.cube_pub.publish(m)
+        m.height, m.width, m.encoding, m.is_bigendian, m.step = nz * nx, ny, self.CUBE_ENCODING, 0, ny
+        m.data = array.array('B', z)
+        return m
 
     def publish_band(self, rope_xy, rope_radius):
         """/g1_slam/obstacles as the fields take it (before the body filter): map frame, 0.25-1.40 m (no floor, no

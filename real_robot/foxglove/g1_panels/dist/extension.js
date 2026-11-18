@@ -162,35 +162,62 @@ function initControls(context) {
   speedRow.append(speedLabel, speed, speedValue);
   root.append(speedRow);
 
-  // scenes: a list, each with a top-view preview (green start, red goal; amber = step over, blue = duck under, grey = walls)
+  // scenes: a drop-down (top-view previews: green start, red goal; amber = step over, blue = duck under, grey = walls);
+  // picking one lays it out in front of the robot (the executor accepts it only while standing)
   const sceneItems = {};
-  if (scenes.length) {
-    const head = el("div", { fontSize: "11px", marginTop: "2px" }, "scenes (only while standing; laid out in front of the robot)");
-    muted.push(head); root.append(head);
-    const list = el("div", { display: "flex", flexDirection: "column", gap: "3px" });
-    for (const sc of scenes) {
-      const item = el("div", { display: "flex", alignItems: "center", gap: "8px", padding: "3px 6px", borderRadius: "4px", cursor: "pointer",
-        border: "1px solid transparent" });
-      item.title = sc.note || sc.name;
-      if (sc.boxes) item.append(scenePreview(sc, 96, 34));
-      const txt = el("div", { display: "flex", flexDirection: "column", minWidth: "0" });
-      txt.append(el("div", { fontWeight: "600", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, sc.name));
-      if (sc.note) { const n = el("div", { fontSize: "11px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, sc.note); muted.push(n); txt.append(n); }
-      item.append(txt);
-      item.addEventListener("click", () => publish(TOPICS.scene, sc.name));
-      sceneItems[sc.name] = item; list.append(item);
-    }
-    root.append(list);
+  let dropOpen = false;
+  const sceneRow = (sc, compact) => {
+    const r = el("div", { display: "flex", alignItems: "center", gap: "8px", minWidth: "0", flex: "1 1 auto" });
+    if (sc.boxes) r.append(scenePreview(sc, compact ? 72 : 96, compact ? 26 : 34));
+    const txt = el("div", { display: "flex", flexDirection: "column", minWidth: "0" });
+    txt.append(el("div", { fontWeight: "600", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, sc.name));
+    if (sc.note) { const n = el("div", { fontSize: "11px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, sc.note); n.dataset.muted = "1"; txt.append(n); }
+    r.append(txt); return r;
+  };
+  const drop = el("div", { position: "relative" });
+  const head = el("div", { display: "flex", alignItems: "center", gap: "6px", padding: "4px 8px", borderRadius: "4px", cursor: "pointer",
+    border: "1px solid", userSelect: "none" });
+  const headBody = el("div", { flex: "1 1 auto", minWidth: "0", display: "flex" });
+  const caret = el("div", { fontSize: "14px" }, "▾");
+  head.append(el("div", { width: "56px", flex: "0 0 56px", fontSize: "11px" }, "scene"), headBody, caret);
+  head.firstChild.dataset.muted = "1";
+  const menu = el("div", { position: "absolute", left: "0", right: "0", top: "100%", marginTop: "2px", zIndex: "10", display: "none",
+    flexDirection: "column", gap: "1px", padding: "3px", borderRadius: "4px", border: "1px solid", maxHeight: "60vh", overflowY: "auto",
+    boxShadow: "0 4px 14px rgba(0,0,0,.45)" });
+  const setOpen = (v) => { dropOpen = v; menu.style.display = v ? "flex" : "none"; caret.textContent = v ? "▴" : "▾"; };
+  head.addEventListener("click", () => setOpen(!dropOpen));
+  for (const sc of scenes) {
+    const item = el("div", { display: "flex", padding: "3px 6px", borderRadius: "3px", cursor: "pointer" });
+    item.title = sc.note || sc.name;
+    item.append(sceneRow(sc, false));
+    item.addEventListener("click", () => { setOpen(false); publish(TOPICS.scene, sc.name); });
+    item.addEventListener("mouseenter", () => { item.dataset.hover = "1"; paint(); });
+    item.addEventListener("mouseleave", () => { delete item.dataset.hover; paint(); });
+    sceneItems[sc.name] = item; menu.append(item);
   }
+  document.addEventListener("mousedown", (e) => { if (dropOpen && !drop.contains(e.target)) setOpen(false); });
+  let shownScene;
+  const showHead = (name) => {
+    if (name === shownScene) return; shownScene = name;
+    const sc = scenes.find((x) => x.name === name);
+    headBody.replaceChildren(sc ? sceneRow(sc, true) : el("div", {}, name || "(none)"));
+  };
+  if (scenes.length) { drop.append(head, menu); root.append(drop); showHead(null); }
 
   let current = { scene: null, obstacles: null };
   const paint = () => {
     root.style.background = colors.bg; root.style.color = colors.fg;
+    if (scenes.length) showHead(current.scene);
     for (const n of muted) n.style.color = colors.muted;
-    for (const [name, item] of Object.entries(sceneItems)) {
-      const on = name === current.scene;
-      item.style.background = on ? colors.button : "transparent";
-      item.style.borderColor = on ? "#e0701a" : "transparent";
+    root.querySelectorAll("[data-muted]").forEach((n) => { n.style.color = colors.muted; });
+    if (scenes.length) {
+      showHead(current.scene);
+      Object.assign(head.style, { background: colors.button, borderColor: colors.border });
+      Object.assign(menu.style, { background: colors.bg, borderColor: colors.border });
+      for (const [name, item] of Object.entries(sceneItems)) {
+        item.style.background = item.dataset.hover ? colors.track : name === current.scene ? colors.button : "transparent";
+        item.style.boxShadow = name === current.scene ? "inset 3px 0 0 #e0701a" : "none";
+      }
     }
     for (const [name, b] of Object.entries(obstacleButtons)) b.style.outline = name === current.obstacles ? "2px solid " + colors.fg : "none";
   };

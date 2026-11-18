@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """wholebody_layout_v3.json from wholebody_layout_v2.1.json (hand-tuned in Foxglove; never edited here).
 
-Changes: the "G1 controls" panel gets the scenes with their geometry (top-view previews in the list) and a short note
+Changes: the "G1 controls" panel gets the scenes with their geometry (a drop-down with top-view previews) and a short note
 each; the scene list is ordered simple -> hard. Needs g1_panels/g1-wholebody-panels.foxe >= 1.1.0.
 
   python3 make_layout_v3.py

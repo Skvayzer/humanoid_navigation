@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from wholebody_core import ObservationBuilder, WholeBodyKinematics, WHOLEBODY, load_contract, pd_torque, quat_matrix
+from wholebody_core import ObservationBuilder, WholeBodyKinematics, WHOLEBODY, enable_obstacle_contacts, load_contract, pd_torque, quat_matrix
 from wholebody_fields import training_fields
 
 DX = .04
@@ -87,8 +87,7 @@ def build_model(bundle, scene, physical=True):
     obstacle = np.array([model.geom(i).name.startswith('obstacle_') for i in range(model.ngeom)])
     robot = model.geom_bodyid > 0
     if physical:
-        # Robot links collide with obstacles only (contype 2 vs conaffinity 2): no new self/floor contacts.
-        model.geom_contype[robot & (model.geom_contype == 0)] = 2
+        enable_obstacle_contacts(model)       # robot links collide with obstacles only: no new self/floor contacts
     return model, obstacle, robot
 
 

@@ -62,6 +62,21 @@ def unit(values, eps=1e-6):
     return values/(np.linalg.norm(values, axis=-1, keepdims=True)+eps)
 
 
+def enable_obstacle_contacts(model):
+    """Simulators: robot links collide with obstacle geoms (contype 2 vs the obstacles' conaffinity 2), with no new
+    self or floor contacts. MuJoCo prefilters contacts by per-body flags fixed at compile time (body_contype /
+    body_conaffinity), so those are recomputed here: changing geom_contype alone let every robot link pass through."""
+    robot = model.geom_bodyid > 0
+    model.geom_contype[robot & (model.geom_contype == 0)] = 2
+    if hasattr(model, 'body_contype'):
+        for body in range(model.nbody):
+            geoms = model.geom_bodyid == body
+            if geoms.any():
+                model.body_contype[body] = int(np.bitwise_or.reduce(model.geom_contype[geoms]))
+                model.body_conaffinity[body] = int(np.bitwise_or.reduce(model.geom_conaffinity[geoms]))
+    return robot
+
+
 OPERATOR_CUTOUT = .05    # m/s of projected field command below which the operator-speed rule stops (task._operator_command)
 
 

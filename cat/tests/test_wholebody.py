@@ -64,6 +64,33 @@ class WholeBodyTest(unittest.TestCase):
             got = self.kin.upper_gravity(q, quat)
             np.testing.assert_allclose(got, expected, atol=2e-3, rtol=1e-3)
 
+    def test_physical_obstacles_stop_robot_links(self):
+        """Regression (2026-11-18): the simulators' physical obstacles never collided, because MuJoCo prefilters
+        contacts with per-body flags fixed at compile time. A wall through the standing robot must touch it."""
+        try:
+            import mujoco
+        except ImportError:
+            self.skipTest('MuJoCo not installed (development check only)')
+        import re
+        from wholebody_core import enable_obstacle_contacts
+        xml = (Path(__file__).resolve().parents[1]/'wholebody'/'robot.xml').read_text()
+        xml = re.sub(r'<asset>.*?</asset>', '', xml, flags=re.S)
+        xml = re.sub(r'<geom[^>]*\smesh="[^"]*"[^>]*/>', '', xml)
+        xml = re.sub(r'<pair[^>]*/>', '', xml)
+        xml = re.sub(r'\smaterial="[^"]*"', '', xml)
+        wall = '<geom name="obstacle_0" type="box" pos="0 0 0.76" size="0.036 1.3 0.76" contype="0" conaffinity="2"/>'
+        xml = re.sub(r'(<worldbody>)', r'\1'+wall, xml, count=1)
+        for physical in (False, True):
+            model = mujoco.MjModel.from_xml_string(xml)
+            if physical:
+                enable_obstacle_contacts(model)
+            data = mujoco.MjData(model)
+            data.qpos[2] = .78; data.qpos[3] = 1.; data.qpos[7:] = self.contract['nominal']
+            mujoco.mj_forward(model, data)
+            wall_id = model.geom('obstacle_0').id
+            touching = any(wall_id in (c.geom1, c.geom2) for c in data.contact[:data.ncon])
+            self.assertEqual(touching, physical)
+
     def test_field_sampler_reproduces_training_interpolation(self):
         grid = self.grids[0]
         rng = np.random.default_rng(1)

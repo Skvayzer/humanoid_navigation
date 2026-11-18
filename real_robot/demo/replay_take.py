@@ -26,6 +26,11 @@ The AR head camera is inset on the right. By default the clip runs from shortly 
 to shortly after it stops (later moves, such as a collapse on DAMP, are left out), with the crouch or the passage
 in slow motion (--full: whole take, --slow 1: real time). --stills writes PNGs of the given take times instead.
 If the bag missed /tf_static, map -> camera_init (for the room) is estimated from the standing moments of the take.
+--static-map <ply> [--logs <wholebody/logs>]: REAL obstacles. The static map points (frame `map`) in the 0.10-1.40 m band
+become small translucent cubes (virtual scene ignored), the pose comes from the 50 Hz executor log (<take>/../../wholebody/logs
+by default; q, IMU quaternion, aligned to the bag by wall clock) instead of the 1 kHz motor log, and the views are a chase
+camera (2 m behind, 1.5 m up, along the pelvis heading) and a top view, with the goal marker. The clip is the walk
+(mode POLICY, moving), cut at the first DAMP.
 Needs numpy, mujoco, Pillow and ffmpeg (no ROS, no OpenCV).
 """
 import argparse
@@ -244,14 +249,128 @@ def plate(dr, xy, lines, fonts, pad=10, gap=4, alpha=185):
     return x, y, x + w, y + h
 
 
+def executor_log(logs):
+    """The 50 Hz executor log on the wall clock (file name = write time in ms, t = monotonic): (wall, q, quat wxyz, mode)."""
+    T, Q, QT, MD = [], [], [], []
+    for f in sorted(glob.glob(str(Path(logs) / 'wholebody_*.npz'))):
+        z = np.load(f); end = int(Path(f).stem.split('_')[-1]) / 1000.
+        T.append(end - (z['t'][-1] - z['t'])); Q.append(z['q']); QT.append(z['quat']); MD.append(z['mode'])
+    return np.concatenate(T), np.concatenate(Q), np.concatenate(QT), np.concatenate(MD)
+
+
+def latch_state(st):
+    l = st.get('latch')
+    return '' if l is None else 'walking' if l > 50 else 'stopping' if l > 0 else 'standing'
+
+
+def main_real(a, take, out):
+    import mujoco
+    m = load(take)
+    pel = [(ts, *read_pose_stamped(raw)) for ts, raw in m['/g1_wb/pelvis']]
+    pt = np.array([p[0] for p in pel]); pxy = np.array([p[1][:2] for p in pel]); pyaw = np.unwrap([yaw(p[2]) for p in pel])
+    goals = [(ts, read_pose_stamped(raw)[0]) for ts, raw in m['/g1_wb/goal']]
+    status = [(ts, json.loads(read_string(raw))) for ts, raw in m['/g1_wb/status']]
+    scene = status[0][1].get('scene', '')
+    wall, mq, mquat, _ = executor_log(a.logs or take.parents[1] / 'wholebody' / 'logs')
+    b = open(a.static_map, 'rb').read(); b = b[b.index(b'end_header\n') + 11:]
+    sp = np.frombuffer(b, '<f4').reshape(-1, 3).astype(float); sp = sp[(sp[:, 2] > 0.10) & (sp[:, 2] < 1.40)]
+    _, first = np.unique(np.floor(sp / 0.08).astype(np.int64), axis=0, return_index=True); sp = sp[first]      # 8 cm voxels
+    gxy = np.array([g[1][:2] for g in goals]); allxy = np.vstack([pxy, gxy])
+    near = (np.linalg.norm(sp[:, None, :2] - allxy[None, ::10], axis=2).min(1) < 4.0) if len(sp) < 60000 else np.ones(len(sp), bool)
+    sp = sp[near]
+    if len(sp) > 14000:
+        sp = sp[np.random.default_rng(0).choice(len(sp), 14000, replace=False)]
+    print('static map: %d cubes near the walk' % len(sp))
+    xml = scene_xml(a.meshes, [], np.zeros((0, 3)))
+    cubes = ''.join('<geom type="box" pos="%.3f %.3f %.3f" size="0.04 0.04 0.04" contype="0" conaffinity="0" rgba="%.2f %.2f %.2f 0.6"/>' % (
+        *p, *([0.62 - 0.22 * (p[2] - 0.1) / 1.3] * 3)) for p in sp)
+    xml = xml.replace('<worldbody>', '<worldbody>' + cubes, 1)
+    model = mujoco.MjModel.from_xml_string(xml); data = mujoco.MjData(model)
+    cube_ids = np.array([g for g in range(model.ngeom) if model.geom_type[g] == mujoco.mjtGeom.mjGEOM_BOX and model.geom_size[g][0] == 0.04])
+    cube_pos = model.geom_pos[cube_ids].copy(); cube_a = model.geom_rgba[cube_ids, 3].copy()
+    rend = mujoco.Renderer(model, PH, PW, max_geom=30000)
+    # the walk: POLICY and the pelvis moving, until the first non-POLICY mode
+    mode = np.array([status[latest(status, x)][1].get('mode') for x in pt])
+    v = np.r_[0, np.linalg.norm(np.diff(pxy, axis=0), axis=1) / np.diff(pt)]; mv = (mode == 'POLICY') & (np.convolve(v, np.ones(5) / 5, 'same') > 0.08)
+    ii = np.flatnonzero(mv); damp = pt[(mode != 'POLICY') & (pt > pt[ii[0]])]; dreason = next((st.get('reason', '') for ts, st in status if len(damp) and ts >= damp[0]), '')
+    t0 = max(pt[0], wall[0], pt[ii[0]] - 1.5); t1 = min(pt[-1], wall[-1], damp[0] + 1.5 if len(damp) else pt[ii[-1]] + 2.5)
+    tr = pose_track(model, data, wall, mq, mquat, pt, pxy, pyaw, t0 - 1, t1)
+    heading = gsmooth(np.interp(tr['t'], pt, pyaw), 0.8); look = gsmooth(tr['xy'], 0.6)
+    if len(damp):                                               # freeze the chase camera at the DAMP (the robot falls)
+        kd = int(np.clip(round((damp[0] - tr['t'][0]) / DT), 0, len(tr['t']) - 1)); heading[kd:] = heading[kd]; look[kd:] = look[kd]
+    c = (allxy.min(0) + allxy.max(0)) / 2; ext = float((allxy.max(0) - allxy.min(0)).max()) + 3.0
+    times = np.arange(t0, t1, 1 / a.fps); fovy = model.vis.global_.fovy
+    ff = subprocess.Popen(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '%dx%d' % (2 * PW, PH + TOP),
+                           '-r', str(a.fps), '-i', '-', '-c:v', 'libx264', '-preset', 'slow', '-pix_fmt', 'yuv420p', '-crf', '18', '-movflags', '+faststart', str(out)], stdin=subprocess.PIPE)
+    f_title, f_sub, f_lab, f_txt, f_small, f_big = font(30, True), font(19), font(20, True), font(19), font(15), font(26, True)
+    trail = []
+    def decorate(sc, g):
+        def add(typ, size, pos, rgba):
+            if sc.ngeom < sc.maxgeom:
+                mujoco.mjv_initGeom(sc.geoms[sc.ngeom], typ, np.asarray(size, float), np.asarray(pos, float), np.eye(3).flatten(), np.asarray(rgba, np.float32)); sc.ngeom += 1
+        add(mujoco.mjtGeom.mjGEOM_CYLINDER, (0.14, 0.004, 0), (g[0], g[1], 0.01), (0.16, 0.75, 0.31, 0.8))
+        add(mujoco.mjtGeom.mjGEOM_CAPSULE, (0.02, 0.5, 0), (g[0], g[1], 0.5), (0.16, 0.75, 0.31, 0.5))
+        for p in trail:
+            add(mujoco.mjtGeom.mjGEOM_SPHERE, (0.022, 0, 0), (p[0], p[1], 0.02), (0.16, 0.45, 0.9, 1))
+    for n, t in enumerate(times):
+        k = int(np.clip(round((t - tr['t'][0]) / DT), 0, len(tr['t']) - 1)); i = min(np.searchsorted(wall, t), len(wall) - 1)
+        data.qpos[:2] = tr['xy'][k]; data.qpos[2] = tr['z'][k]; data.qpos[3:7] = tr['quat'][k]; data.qpos[7:] = mq[i]
+        mujoco.mj_kinematics(model, data)
+        if not trail or np.linalg.norm(trail[-1] - data.qpos[:2]) > 0.05:
+            trail.append(data.qpos[:2].copy())
+        g = goals[latest(goals, t)][1]
+        h = heading[k]; hv = np.array([math.cos(h), math.sin(h)]); P = look[k]
+        cam = mujoco.MjvCamera(); T = np.r_[P + 1.2 * hv, 0.4]; C = np.r_[P - 2.2 * hv, 2.1]
+        cam.lookat[:] = T; cam.azimuth = math.degrees(h); cam.distance = float(np.linalg.norm(T - C)); cam.elevation = -math.degrees(math.atan2(1.7, 3.4))
+        model.vis.global_.orthographic, model.vis.global_.fovy = 0, 55
+        # hide the map voxels between the camera and the robot (corridor round the sight line) and next to the camera
+        pe_ = np.r_[data.qpos[:2], 0.75]; seg = pe_ - C; u = np.clip(((cube_pos - C) @ seg) / (seg @ seg), 0, 1)
+        dseg = np.linalg.norm(cube_pos - (C + u[:, None] * seg), axis=1)
+        hide = (dseg < 0.9) | (np.linalg.norm(cube_pos - C, axis=1) < 1.6)
+        model.geom_rgba[cube_ids, 3] = np.where(hide, 0.0, cube_a)
+        rend.update_scene(data, cam); decorate(rend.scene, g); img1 = Image.fromarray(rend.render())
+        model.geom_rgba[cube_ids, 3] = cube_a
+        cam = mujoco.MjvCamera(); cam.lookat[:] = (c[0], c[1], 0); cam.azimuth = 90; cam.elevation = -90; cam.distance = 8.0
+        model.vis.global_.orthographic, model.vis.global_.fovy = 1, ext
+        rend.update_scene(data, cam); decorate(rend.scene, g); img2 = Image.fromarray(rend.render())
+        frame = Image.new('RGB', (2 * PW, PH + TOP), PAPER); frame.paste(img1, (0, TOP)); frame.paste(img2, (PW, TOP))
+        ov = Image.new('RGBA', frame.size, (0, 0, 0, 0)); dr = ImageDraw.Draw(ov)
+        dr.text((24, 10), 'Unitree G1, real robot: walking among real obstacles', font=f_title, fill=INK + (255,))
+        dr.text((24, 46), 'take %s  |  replay from the recorded joints, IMU and SLAM pose; obstacles = static room map' % take.name, font=f_sub, fill=(190, 198, 210, 255))
+        tb = 't = %4.1f s' % (t - t0); tw = dr.textbbox((0, 0), tb, font=f_big)[2]; dr.text((2 * PW - 24 - tw, 22), tb, font=f_big, fill=INK + (255,))
+        dr.line((PW, TOP, PW, TOP + PH), fill=PAPER + (255,), width=4)
+        dist = float(np.linalg.norm(data.qpos[:2] - g[:2]))
+        plate(dr, (16, TOP + 14), ['ROBOT VIEW', '2.2 m behind, 2.1 m up, along the heading; map voxels in the line of sight hidden'], [f_lab, f_small])
+        stt = status[latest(status, t)][1]
+        plate(dr, (16, TOP + PH - 62), ['to goal %.2f m   %s' % (dist, latch_state(stt))], [f_lab])
+        if len(damp):
+            if t >= damp[0]:
+                s_ = 'POLICY -> DAMP at t = %.1f s: %s' % (damp[0] - t0, dreason); sw = dr.textbbox((0, 0), s_, font=f_lab)[2]
+                dr.rounded_rectangle((PW - sw // 2 - 14, TOP + PH - 56, PW + sw // 2 + 14, TOP + PH - 14), 8, fill=(200, 30, 30, 235)); dr.text((PW - sw // 2, TOP + PH - 49), s_, font=f_lab, fill=INK + (255,))
+            else:
+                dr.text((PW - 24 - 330, 58), 'DAMP at t = %.1f s' % (damp[0] - t0), font=f_small, fill=(255, 150, 150, 255))
+        plate(dr, (PW + 16, TOP + 14), ['VIEW FROM ABOVE'], [f_lab])
+        lx, ly = PW + 16, TOP + 66
+        items = [((150, 150, 150), 'static map, 0.10-1.40 m band'), (GREEN, 'goal'), (BLUE, 'pelvis trail')]
+        dr.rounded_rectangle((lx, ly, lx + 300, ly + 20 + 28 * len(items)), 8, fill=PAPER + (170,))
+        for j, (cc, ss) in enumerate(items):
+            dr.rounded_rectangle((lx + 12, ly + 14 + 28 * j, lx + 30, ly + 30 + 28 * j), 3, fill=cc + (255,)); dr.text((lx + 40, ly + 12 + 28 * j), ss, font=f_small, fill=INK + (255,))
+        frame = Image.alpha_composite(frame.convert('RGBA'), ov).convert('RGB'); ff.stdin.write(frame.tobytes())
+    ff.stdin.close(); ff.wait()
+    print('wrote %s: %d frames, %.1f s (take %.1f..%.1f s)' % (out, len(times), len(times) / a.fps, t0 - pt[0], t1 - pt[0]))
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('take'); ap.add_argument('--meshes', required=True)
     ap.add_argument('--fps', type=float, default=30.); ap.add_argument('--out')
     ap.add_argument('--full', action='store_true', help='the whole take (default: the walk, +-2 s)')
     ap.add_argument('--slow', type=float, default=0.4, help='playback speed through the crouch / the gap (1: real time)')
     ap.add_argument('--stills', help='comma-separated take times (s): write PNGs next to --out instead of the video')
+    ap.add_argument('--static-map'); ap.add_argument('--logs')
     a = ap.parse_args(); take = Path(a.take); out = Path(a.out) if a.out else take / 'replay.mp4'
     import mujoco
+    if a.static_map:
+        return main_real(a, take, out)
     m = load(take)
     t_map_ci, how = map_from_camera_init(m)
     if how != 'tf_static':

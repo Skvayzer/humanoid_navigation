@@ -186,6 +186,9 @@ def main():
     for sc in a.scenarios:
         record = []; res = run_policy(sc, record)
         pts, snaps = simulate_lidar(sc, record, np.random.default_rng(0))
+        np.savez_compressed(out / ('%s_lidar.npz' % sc), pts=pts, t=np.array([s[0] for s in snaps]),
+                            q=np.array([s[1] for s in snaps]), pos=np.array([s[2] for s in snaps]),
+                            quat=np.array([s[3] for s in snaps]))
         rows = evaluate(sc, pts, snaps, out); summary(sc, rows)
         print('  policy run: reached %s, fell %s, %d lidar points' % (res['reached'], res['fell'], len(pts)))
 

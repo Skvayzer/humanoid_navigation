@@ -328,6 +328,9 @@ class FieldWorker:
             self.last_error = 'no fresh real obstacle cloud'
             return None
         body = self.body_source() if self.body_source is not None else None
+        if self.body_source is not None and body is None:     # no pose yet: the robot and the rope would be obstacles
+            self.last_error = 'no body pose for the lidar self-filter yet'
+            return None
         return np.asarray(points, float), body          # float64: column 3 may be an absolute time
 
     def set_world(self, mode=None, scene=None):

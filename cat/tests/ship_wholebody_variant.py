@@ -42,12 +42,21 @@ def main():
     p.add_argument('--parent', required=True, help='training lineage')
     p.add_argument('--exported-from', required=True, help='checkpoint path(s) in the training repository')
     p.add_argument('--steps', type=int, default=320)
+    p.add_argument('--operator-speed', type=float, nargs=2, metavar=('MIN', 'MAX'),
+                   help='the policy was trained with an operator speed in [MIN, MAX] m/s: record it, so the executor demands --speed')
+    p.add_argument('--goal-seed', choices=('ball', 'column'),
+                   help='goal seed the policy was trained with (column = goal projected onto the ground); default: the one '
+                        'recorded in deploy_spec.json environment_config, ball if none')
     args = p.parse_args()
 
     out = HERE/'wholebody'/args.name
     if out.exists():
         raise SystemExit(f'{out} exists: variants are never replaced, pick a new name')
     spec = json.loads((args.bundle/'deploy_spec.json').read_text())
+    trained_seed = ((spec.get('environment_config') or {}).get('goal_seed') or {}).get('mode', 'ball')
+    if args.goal_seed is not None and args.goal_seed != trained_seed:
+        raise SystemExit(f'--goal-seed {args.goal_seed}: the policy was trained with the {trained_seed} goal seed')
+    args.goal_seed = trained_seed
     main_contract = json.loads((HERE/'wholebody'/'policy_contract.json').read_text())
     rollouts = np.load(args.bundle/'reference_rollouts.npz')
 
@@ -83,6 +92,16 @@ def main():
         same_as=f"{args.robustness_from.parent.name}: deploy_spec training randomisation identical",
         sim2sim_plain_mujoco='not run for this policy',
         limits=robustness['limits'])
+    if args.operator_speed:
+        low, high = args.operator_speed
+        contract['command'] = dict(rule='operator_speed', trained_speed_m_s=[low, high], cutout_m_s=.05, nominal_m_s=.525,
+                                   note='field direction at the operator speed (executor --speed), no stop latch; '
+                                        'wholebody_core.command_from_fields(speed=...) = task._operator_command')
+    if args.goal_seed != 'ball':
+        contract['goal_seed'] = args.goal_seed
+    if (spec.get('environment_config') or {}).get('upper_target_average'):
+        # trained with the waist/arm motors tracking the mean of the last two targets: the executor's 'avg2' filter
+        contract['upper_filter'] = 'avg2'
     out.mkdir(parents=True)
     shutil.copyfile(args.bundle/'policy.onnx', out/'policy.onnx')
     (out/'policy_contract.json').write_text(json.dumps(contract, indent=1)+'\n')

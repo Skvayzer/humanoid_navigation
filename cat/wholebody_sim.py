@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from wholebody_core import ObservationBuilder, WholeBodyKinematics, WHOLEBODY, load_contract, pd_torque, quat_matrix
+from wholebody_core import ObservationBuilder, WholeBodyKinematics, WHOLEBODY, enable_obstacle_contacts, load_contract, pd_torque, quat_matrix
 from wholebody_fields import training_fields
 
 DX = .04
@@ -87,8 +87,7 @@ def build_model(bundle, scene, physical=True):
     obstacle = np.array([model.geom(i).name.startswith('obstacle_') for i in range(model.ngeom)])
     robot = model.geom_bodyid > 0
     if physical:
-        # Robot links collide with obstacles only (contype 2 vs conaffinity 2): no new self/floor contacts.
-        model.geom_contype[robot & (model.geom_contype == 0)] = 2
+        enable_obstacle_contacts(model)       # robot links collide with obstacles only: no new self/floor contacts
     return model, obstacle, robot
 
 
@@ -113,7 +112,8 @@ def run(args):
     data.qpos[7:] = contract['nominal']
     mujoco.mj_forward(model, data)
     waypoints = scene.waypoints(args.waypoint_spacing); active = 0
-    builder = ObservationBuilder(contract, kin, frequency=args.frequency)
+    builder = ObservationBuilder(contract, kin, frequency=args.frequency, speed=args.speed)
+    goal_seed = args.goal_seed or contract.get('goal_seed', 'ball')
 
     held = {'step': -1, 'noise': (np.zeros(2), 0.)}
     def pose():
@@ -149,7 +149,7 @@ def run(args):
         if not free[tuple(np.clip(np.round((goal[:2]-first[:2])/DX).astype(int), 0, np.array(WINDOW[:2])-1))]:
             idx = np.argwhere(free); target = np.round((goal[:2]-first[:2])/DX)
             goal[:2] = first[:2]+idx[np.argmin(((idx-target)**2).sum(-1))]*DX
-        fields = training_fields(occ, first, DX, goal); field_center, field_goal = center, goal
+        fields = training_fields(occ, first, DX, goal, goal_seed=goal_seed); field_center, field_goal = center, goal
     update_fields(data.qpos[:2].copy())
     gyro = data.sensordata[gyro_adr:gyro_adr+3].copy()
     obs = builder.reset(data.qpos[7:].copy(), *pose(), fields, dq=data.qvel[6:].copy(), gyro=gyro)
@@ -210,6 +210,9 @@ def run(args):
                 builder.rearm()
         if active == len(waypoints)-1 and np.linalg.norm(waypoints[-1]-xy) < .4:
             reached = True
+        if args.speed is not None:     # as the executor: stand at the final goal (arrive 0.25 m, release 0.45 m)
+            last = active == len(waypoints)-1; distance = np.linalg.norm(waypoints[-1]-xy)
+            builder.arrived = last and distance < (.45 if builder.arrived else .25)
         if data.qpos[2] < .45:
             fell = True
             break
@@ -222,7 +225,7 @@ def run(args):
                   progress_m=round(float(data.qpos[0]-scene.start[0]), 3), contact_steps=int(contact_steps),
                   contact_bodies=dict(sorted(contact_parts.items(), key=lambda kv: -kv[1])[:6]),
                   settings=dict(pose_noise=args.pose_noise, pose_period=args.pose_period, pose_latency=args.pose_latency, action_delay=args.action_delay,
-                                action_latency_ms=args.action_latency_ms, kp_scale=kp_scale, robot_perception=args.robot_perception, ghost=args.ghost, frequency=args.frequency),
+                                action_latency_ms=args.action_latency_ms, kp_scale=kp_scale, robot_perception=args.robot_perception, ghost=args.ghost, frequency=args.frequency, goal_seed=goal_seed),
                   ms_per_step={k: round(1000*v/(step+1), 2) for k, v in timing.items()})
     if args.trace:
         np.savez_compressed(args.trace, **{k: np.asarray(v) for k, v in trace.items()}, waypoints=np.asarray(waypoints))
@@ -256,6 +259,8 @@ def main():
     p.add_argument('--waypoint-spacing', type=float, default=1.6)
     p.add_argument('--advance-radius', type=float, default=.8)
     p.add_argument('--frequency', type=float, default=1.4, help='gait frequency (training: U(1.3, 1.5) Hz)')
+    p.add_argument('--speed', type=float, help='operator speed (m/s) for policies trained with one; default: the field speed rule')
+    p.add_argument('--goal-seed', choices=('ball', 'column'), help='field goal seed (default: the contract\'s, ball if absent)')
     p.add_argument('--pose-noise', type=float, default=0., help='pelvis xy noise std (m) and yaw noise std (rad)')
     p.add_argument('--pose-latency', type=int, default=0, help='pose latency in control steps (20 ms)')
     p.add_argument('--pose-period', type=int, default=1, help='pose noise refreshed every N control steps (SLAM rate); 1 = every step')

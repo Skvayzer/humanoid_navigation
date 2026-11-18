@@ -270,6 +270,7 @@ Four more whole-body policies ship next to `u596` and `robust_delay_v1_u150` (no
 | `stationary_hands_S2far2_u330` | the same with wider margins: the hand retreats farther (0.30 m target) |
 | `stationary_hands_T2_u410` | walking between tables facing forward with the hands raised (gaps >= 0.54 m) |
 | `stationary_hands_E2_u300` | all-round traversal, energy-priced |
+| `stationary_hands_V7_u100` | slow traversal: follows `--speed` (0.1-0.6 m/s, start at 0.15) and stops at the goal (ground-projected goal) |
 
 Each folder's README has its simulation results and limits. None is sim-to-sim tested yet: start in `shadow`, then
 `active` on the gantry.

@@ -13,6 +13,7 @@ model that `checkpoint_manifest.json` pins. Nothing here commands motors.
 | `wholebody/stationary_hands_S2far_u200/` | `stationary_hands_S2far_u200` | **standing hand protection**: the threatened hand retreats, the feet stay planted; moving objects are not seen by the robot's fields yet -- see its README |
 | `wholebody/stationary_hands_S2far2_u330/` | `stationary_hands_S2far2_u330` | **standing hand protection, wider margins** (0.30 m target, 0.50 m anticipation): pulls the hand farther away than S2far; moving objects are not seen by the robot's fields yet -- see its README |
 | `wholebody/stationary_hands_T2_u410/` | `stationary_hands_T2_u410` | **table passages**: between tables facing forward with the hands raised (gaps >= 0.54 m) -- see its README |
+| `wholebody/stationary_hands_V7_u100/` | `stationary_hands_V7_u100` | **slow traversal with speed control**: follows `--speed` (0.1-0.6 m/s) and stops at the goal; ground-projected goal (recorded in its contract) -- see its README |
 | `wholebody/stationary_hands_E2_u300/` | `stationary_hands_E2_u300` | **all-round, energy-priced**: best traversal of the hand-protective policies, lowest energy per metre -- see its README |
 
 The `stationary_hands_*` folders (2026-11-17) keep the robust variant's runtime contract and training

@@ -34,7 +34,8 @@ from .lowlevel import decode_lowstate, NUM_MOTORS
 
 POLICIES = {'u596': WHOLEBODY, 'robust_delay_v1_u150': WHOLEBODY / 'robust_delay_v1_u150'}
 # Hand-protective variants (2026-11-17): same runtime contract, own folders; see cat/WHOLEBODY.md and each README.
-HAND_POLICIES = ('stationary_hands_S2far_u200', 'stationary_hands_S2far2_u330', 'stationary_hands_T2_u410', 'stationary_hands_E2_u300')
+HAND_POLICIES = ('stationary_hands_S2far_u200', 'stationary_hands_S2far2_u330', 'stationary_hands_T2_u410', 'stationary_hands_E2_u300',
+                 'stationary_hands_V7_u100')
 POLICIES.update({name: WHOLEBODY / name for name in HAND_POLICIES})
 
 
@@ -50,6 +51,11 @@ def parse(argv=None):
     p.add_argument('--geofence-from-scene', type=float, metavar='MARGIN',
                    help='geofence = scene bounding box + MARGIN (only if that floor is really free)')
     p.add_argument('--mount', default='unitree_urdf', choices=('unitree_urdf', 'robot_xml'))
+    p.add_argument('--speed', type=float, help='operator speed in m/s, for policies trained with one (their policy_contract.json '
+                   '"command" record, e.g. 0.1-0.6 m/s): the field gives the direction, this the speed; start low (0.15)')
+    p.add_argument('--goal-seed', choices=('ball', 'column'), help='field goal seed; default: the one in the policy contract '
+                   '("goal_seed", ball if absent). column = goal projected onto the ground (level guidance at the goal); '
+                   'overriding the trained seed is out of distribution: simulate first')
     p.add_argument('--active', action='store_true', help='allow motor commands (gantry procedure; see README)')
     p.add_argument('--start', choices=('idle', 'shadow'), default='idle')
     p.add_argument('--kp-scale', type=float, default=1.0)
@@ -61,7 +67,8 @@ def parse(argv=None):
                    help='> 0: points this close to a palm are part of the robot too (an object held in the hand)')
     p.add_argument('--no-dynamic', action='store_true', help="with --static-map: obstacles = the map only, no lidar layer")
     p.add_argument('--static-map', help="static ESDF npz (esdf_layers) of the room: 'real' / 'both' = this map + the lidar's last 0.5 s")
-    p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'median3', 'ema', 'butter2', 'rate'), default='none', help='waist/arm command filter (policy dithering)')
+    p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'median3', 'ema', 'butter2', 'rate'),
+                   help="waist/arm command filter (policy dithering); default: the policy contract's 'upper_filter' (the one it was trained with), else none")
     p.add_argument('--upper-alpha', type=float, default=0.5, help='ema: weight of the new target')
     p.add_argument('--upper-cutoff-hz', type=float, default=6.0, help='butter2: cutoff')
     p.add_argument('--upper-rate', type=float, default=0.5, help='rate: slew limit, rad/s')
@@ -117,6 +124,21 @@ class Recorder:
 
     def close(self):
         self.flush(); self.queue.put(None); self.thread.join(timeout=10)
+
+
+def checked_speed(contract, speed):
+    """An operator-speed policy needs --speed inside the range it was trained on; other policies must not get one."""
+    rule = (contract.get('command') or {}).get('rule', 'field_speed')
+    if rule != 'operator_speed':
+        if speed is not None:
+            raise SystemExit('--speed: this policy was trained with the field speed (about 0.53 m/s), not an operator speed')
+        return None
+    low, high = contract['command']['trained_speed_m_s']
+    if speed is None:
+        raise SystemExit(f'this policy needs --speed (trained {low}-{high} m/s; start with 0.15)')
+    if not low <= speed <= high:
+        raise SystemExit(f'--speed {speed} outside the trained range {low}-{high} m/s')
+    return float(speed)
 
 
 def policy_paths(name):
@@ -401,6 +423,10 @@ def main(argv=None):
     args = parse(argv)
     onnx_path, contract_path = policy_paths(args.policy)
     contract = load_contract(contract_path); kin = FastKinematics(contract)
+    args.speed = checked_speed(contract, args.speed)
+    trained_filter = contract.get('upper_filter', 'none'); args.upper_filter = args.upper_filter or trained_filter
+    filter_note = None if args.upper_filter == trained_filter else \
+        'upper filter %s, but this policy was trained with %s' % (args.upper_filter, trained_filter)
     import onnxruntime as ort
     opts = ort.SessionOptions(); opts.intra_op_num_threads = 1; opts.inter_op_num_threads = 1
     session = ort.InferenceSession(str(onnx_path), opts, providers=['CPUExecutionProvider'])
@@ -410,6 +436,8 @@ def main(argv=None):
     rclpy.init()
     bridge = Bridge(args, contract)
     log = bridge.node.get_logger()
+    if filter_note:
+        log.warning(filter_note)
     log.info('policy %s (%s), scene %s, mount %s, %s' % (args.policy, onnx_path, args.scene, args.mount,
              'ACTIVE: motor output allowed' if args.active else 'PASSIVE: /lowcmd publisher not created'))
 
@@ -434,10 +462,13 @@ def main(argv=None):
         m = args.geofence_from_scene; fence = (min(xs) - m, max(xs) + m, min(ys) - m, max(ys) + m)
     log.info('scene %s anchored at (%.2f, %.2f, %.1f deg); goal (%.2f, %.2f); geofence %s' %
              (scene.name, anchor[0], anchor[1], np.degrees(anchor[2]), scene.goal[0], scene.goal[1], fence))
-    worker = FieldWorker(scene, n=args.field_workers, static=args.static_map, dynamic=not args.no_dynamic)
+    trained_seed = contract.get('goal_seed', 'ball'); goal_seed = args.goal_seed or trained_seed
+    if goal_seed != trained_seed:
+        log.warning('goal seed %s, but this policy was trained with %s: out of distribution, simulate first' % (goal_seed, trained_seed))
+    worker = FieldWorker(scene, n=args.field_workers, static=args.static_map, dynamic=not args.no_dynamic, goal_seed=goal_seed)
     if args.static_map:
         log.info('static ESDF layer %s%s' % (args.static_map, ' only (no lidar layer)' if args.no_dynamic else ' + lidar layer'))
-    cfg = rn.Config(mount=args.mount, kp_scale=args.kp_scale, geofence=fence, allow_active=args.active,
+    cfg = rn.Config(mount=args.mount, kp_scale=args.kp_scale, geofence=fence, allow_active=args.active, speed=getattr(args, 'speed', None),
                     upper_filter=args.upper_filter, upper_alpha=args.upper_alpha, upper_cutoff_hz=args.upper_cutoff_hz,
                     upper_rate=args.upper_rate)
     ex = rn.Executor(contract, kin, infer, FieldPlanner(scene), worker, cfg)

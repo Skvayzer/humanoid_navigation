@@ -41,6 +41,34 @@ class FieldsTest(unittest.TestCase):
         np.testing.assert_array_equal(got.sdf, expected.sdf); np.testing.assert_array_equal(got.gf, expected.gf)
         np.testing.assert_array_equal(got.bf, expected.bf); np.testing.assert_allclose(goal_used, g)
 
+    def test_column_goal_keeps_guidance_level(self):
+        # Open floor, goal 0.4 m ahead: the ball seed (z = 0.75 m) tilts the head's arrow down and the feet's up; the
+        # column seed (goal projected onto the ground) keeps both level. Distances and boundary normals are unchanged.
+        shape = (64, 32, 38); first = np.array([-1.26, -0.62, DX / 2]); blocked = np.zeros(shape, bool)
+        goal = np.array([1.0, 0., .75]); points = np.array([[.6, 0., 1.26], [.6, 0., .06]])      # head, feet
+        ball = training_fields(blocked, first, DX, goal)
+        column = training_fields(blocked, first, DX, goal, goal_seed='column')
+        def elevation(grid):
+            g = grid.sample(points)[0]
+            return np.degrees(np.arctan2(g[:, 2], np.linalg.norm(g[:, :2], axis=-1)))
+        b, c = elevation(ball), elevation(column)
+        self.assertLess(b[0], -40.); self.assertGreater(b[1], 40.)
+        self.assertLess(abs(c[0]), 5.); self.assertLess(abs(c[1]), 15.)
+        np.testing.assert_array_equal(ball.sdf, column.sdf); np.testing.assert_array_equal(ball.bf, column.bf)
+        with self.assertRaises(ValueError):
+            training_fields(blocked, first, DX, goal, goal_seed='disc')
+
+    def test_solve_fields_passes_goal_seed(self):
+        sim = Scene('sidegap_plain_047'); scene = fl.VirtualScene('sidegap_plain_047', anchor=(*sim.start, 0.))
+        base = sim.start + np.array([0.37, -0.11]); goal = sim.waypoints()[0]
+        got, used = fl.solve_fields(base, goal, scene.occupancy, goal_seed='column')
+        center = np.round(base / DX) * DX
+        first = np.array([center[0] - WINDOW[0] / 2 * DX + DX / 2, center[1] - WINDOW[1] / 2 * DX + DX / 2, DX / 2])
+        expected = training_fields(sim.occupancy(first, WINDOW), first, DX, np.asarray(used), goal_seed='column')
+        np.testing.assert_array_equal(got.gf, expected.gf)
+        default, _ = fl.solve_fields(base, goal, scene.occupancy)
+        self.assertGreater(np.abs(default.gf - got.gf).max(), 0.1)
+
     def test_worker_double_buffer(self):
         scene = fl.VirtualScene('gap_044_exact', anchor=(0.5, 0.2, 0.3))
         worker = fl.FieldWorker(scene)

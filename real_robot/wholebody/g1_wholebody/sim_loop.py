@@ -40,8 +40,9 @@ class DelayedFields:
     does: the control step never pays for the solve); service() solves outside the timed step; poll() delivers
     the result field_latency after the request."""
 
-    def __init__(self, scene, latency_s, clock, n=1):
+    def __init__(self, scene, latency_s, clock, n=1, goal_seed='ball'):
         self.scene, self.latency, self.clock = scene, latency_s, clock
+        self.goal_seed = goal_seed
         self.n, self.max_pending = n, 1                 # as FieldWorker: up to n solves at once in joystick mode
         self.queued, self.ready = [], []; self.solves = 0
 
@@ -53,7 +54,7 @@ class DelayedFields:
 
     def service(self):
         for t, xy, goal in self.queued:
-            fields, used = solve_fields(xy, goal, self.scene.occupancy)
+            fields, used = solve_fields(xy, goal, self.scene.occupancy, goal_seed=self.goal_seed)
             self.ready.append((t + self.latency, fields, used)); self.solves += 1
         self.queued = []
 
@@ -66,9 +67,16 @@ class DelayedFields:
         return fields, goal
 
 
+def policy_folder(policy):
+    """A POLICIES name, a folder under cat/wholebody/ (the shipped variants) or a path."""
+    if policy in POLICIES:
+        return POLICIES[policy]
+    return WHOLEBODY / policy if (WHOLEBODY / policy / 'policy_contract.json').exists() else Path(policy)
+
+
 def make_session(policy):
     import onnxruntime as ort
-    path = POLICIES.get(policy, Path(policy)) / 'policy.onnx'
+    path = policy_folder(policy) / 'policy.onnx'
     session = ort.InferenceSession(str(path), providers=['CPUExecutionProvider'])
     return lambda obs: session.run(None, {'obs': obs[None].astype(np.float32)})[0][0]
 
@@ -81,18 +89,23 @@ def gantry_schedule(t_go=11.0):
 def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0, 0.5, 0.4), seconds=40.,
         procedure='gantry', pose_hz=10., pose_latency_s=0.06, pose_noise=0.01, action_latency_s=0.010,
         field_latency_s=2.5, field_period_s=1.0, motor_kp_scale=0.9, true_mount='unitree_urdf', exec_mount='unitree_urdf',
-        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True, upper_filter='none', upper_alpha=0.5, upper_cutoff_hz=6.0, upper_rate=0.5, field_workers=1, stop_at_goal=True, record=None):
-    contract = load_contract(); kin = FastKinematics(contract)
+        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True, upper_filter=None, upper_alpha=0.5, upper_cutoff_hz=6.0, upper_rate=0.5, field_workers=1, stop_at_goal=True, record=None, goal_seed=None,
+        speed=None):
+    policy_dir = policy_folder(policy)
+    contract = load_contract(policy_dir / 'policy_contract.json'); kin = FastKinematics(contract)   # the policy's own runtime contract
+    if (contract.get('command') or {}).get('rule') == 'operator_speed' and speed is None:
+        raise ValueError(f'{policy} was trained with an operator speed: pass speed (m/s)')
+    upper_filter = upper_filter or contract.get('upper_filter', 'none')   # default: the filter the policy was trained with
     clock = SimClock()
     scene_obj = VirtualScene(scene, anchor=anchor)
     planner = FieldPlanner(scene_obj, period=field_period_s)
-    fields = DelayedFields(scene_obj, field_latency_s, clock, n=field_workers)
+    fields = DelayedFields(scene_obj, field_latency_s, clock, n=field_workers, goal_seed=goal_seed or contract.get('goal_seed', 'ball'))
     xs = [scene_obj.start[0], scene_obj.goal[0]] + [b['center'][0] for b in scene_obj.boxes]
     ys = [scene_obj.start[1], scene_obj.goal[1]] + [b['center'][1] for b in scene_obj.boxes]
     fence = (min(xs) - fence_margin, max(xs) + fence_margin, min(ys) - fence_margin, max(ys) + fence_margin)
-    cfg = rn.Config(mount=exec_mount, allow_active=True, geofence=fence, imu_heading=imu_heading, upper_filter=upper_filter,
+    cfg = rn.Config(mount=exec_mount, allow_active=True, geofence=fence, imu_heading=imu_heading, upper_filter=upper_filter, speed=speed,
                     upper_alpha=upper_alpha, upper_cutoff_hz=upper_cutoff_hz, upper_rate=upper_rate)
-    ex = rn.Executor(contract, kin, make_session(policy), planner, fields, cfg, clock=clock)
+    ex = rn.Executor(contract, kin, make_session(policy_dir), planner, fields, cfg, clock=clock)
     hang = None
     if procedure == 'gantry':
         x, y = scene_obj.start
@@ -217,11 +230,15 @@ def main():
     p.add_argument('--field-latency', type=float, default=2.5); p.add_argument('--motor-kp-scale', type=float, default=0.9)
     p.add_argument('--true-mount', default='unitree_urdf'); p.add_argument('--exec-mount', default='unitree_urdf')
     p.add_argument('--physical', action='store_true'); p.add_argument('--video'); p.add_argument('--assets'); p.add_argument('--out')
+    p.add_argument('--speed', type=float, help='operator speed (m/s), for policies trained with one')
+    p.add_argument('--goal-seed', choices=('ball', 'column'), help='default: the policy contract\'s')
+    p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'median3', 'ema', 'butter2', 'rate'), help='default: the policy contract\'s')
     a = p.parse_args()
     t = time.time()
     r = run(a.scene, a.policy, tuple(a.anchor), a.seconds, a.procedure, a.pose_hz, a.pose_latency, a.pose_noise,
             a.action_latency, a.field_latency, motor_kp_scale=a.motor_kp_scale, true_mount=a.true_mount,
-            exec_mount=a.exec_mount, seed=a.seed, video=a.video, assets=a.assets, physical=a.physical)
+            exec_mount=a.exec_mount, seed=a.seed, video=a.video, assets=a.assets, physical=a.physical, speed=a.speed,
+            goal_seed=a.goal_seed, upper_filter=a.upper_filter)
     r['wall_s'] = round(time.time() - t, 1)
     text = json.dumps(r, indent=1)
     if a.out:

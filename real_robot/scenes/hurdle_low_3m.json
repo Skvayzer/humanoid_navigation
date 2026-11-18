@@ -1,0 +1,36 @@
+{
+ "scene_id": "hurdle_low_3m",
+ "source": "real_robot: one floor hurdle 1.5 m ahead, 0.10 m high, 0.10 m deep, 2 m wide (training s1_hurdle_low): the policy steps over it; start at origin facing +x",
+ "start": [
+  0.0,
+  0.0,
+  0.0
+ ],
+ "goal": [
+  3.0,
+  0.0,
+  0.75
+ ],
+ "room_dimensions": [
+  4.0,
+  2.0,
+  1.6
+ ],
+ "boxes": [
+  {
+   "name": "hurdle",
+   "category": "hurdle",
+   "center": [
+    1.5,
+    0.0,
+    0.05
+   ],
+   "half_size": [
+    0.05,
+    1.0,
+    0.05
+   ],
+   "yaw": 0.0
+  }
+ ]
+}

@@ -75,8 +75,34 @@ function initEsdf(context) {
 }
 
 // ---------------------------------------------------------------------------------------------------- G1 controls
+const SVG = "http://www.w3.org/2000/svg";
+function svg(tag, attrs) { const e = document.createElementNS(SVG, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+
+// floor obstacles (stepped over / walked round) vs overhead ones (ducked under): the bottom of the box decides
+function boxColor(b) { return b.c[2] - b.h[2] > 0.3 ? "#3d7be0" : b.h[2] < 0.15 ? "#e0a020" : "#9a9a9a"; }
+
+function scenePreview(scene, w, h) {
+  const box = svg("svg", { width: w, height: h, viewBox: "0 0 " + w + " " + h });
+  box.style.overflow = "hidden";                                     // the start -> goal strip, +-1.1 m across; walls clipped
+  const x0 = Math.min(0, scene.goal[0]) - 0.4, x1 = Math.max(0, scene.goal[0]) + 0.4;
+  const y0 = Math.min(-1.1, scene.goal[1] - 0.3), y1 = Math.max(1.1, scene.goal[1] + 0.3);
+  const k = Math.min(w / (x1 - x0), h / (y1 - y0));
+  const ox = (w - k * (x1 - x0)) / 2, oy = (h - k * (y1 - y0)) / 2;
+  const X = (x) => ox + k * (x - x0), Y = (y) => h - (oy + k * (y - y0));     // +x right, +y up (robot's left)
+  for (const b of scene.boxes) {
+    const g = svg("rect", { x: -k * b.h[0], y: -k * b.h[1], width: Math.max(2 * k * b.h[0], 1.5), height: Math.max(2 * k * b.h[1], 1.5),
+      fill: boxColor(b), transform: "translate(" + X(b.c[0]) + "," + Y(b.c[1]) + ") rotate(" + (-(b.yaw || 0) * 180 / Math.PI) + ")" });
+    box.append(g);
+  }
+  box.append(svg("line", { x1: X(0), y1: Y(0), x2: X(scene.goal[0]), y2: Y(scene.goal[1]), stroke: "#888", "stroke-width": 1, "stroke-dasharray": "2 2" }));
+  box.append(svg("circle", { cx: X(0), cy: Y(0), r: 3, fill: "#1f9d3a" }));
+  box.append(svg("circle", { cx: X(scene.goal[0]), cy: Y(scene.goal[1]), r: 3, fill: "#e02020" }));
+  return box;
+}
+
 function initControls(context) {
   const state = Object.assign({ scenes: [], speedMin: 0.1, speedMax: 0.6, speedStep: 0.05 }, context.initialState || {});
+  const scenes = state.scenes.map((s) => (typeof s === "string" ? { name: s, boxes: null } : s));
   const root = context.panelElement;
   Object.assign(root.style, { display: "flex", flexDirection: "column", gap: "6px", padding: "6px 8px", height: "100%",
     boxSizing: "border-box", overflowY: "auto", fontFamily: "system-ui, sans-serif", fontSize: "12px" });
@@ -87,30 +113,41 @@ function initControls(context) {
     context.publish(topic, { data: String(data) });
   };
   let colors = theme("dark");
-  const buttons = [];
-  const button = (text, color, tip, onClick) => {
-    const b = el("button", { flex: "1 1 auto", minWidth: "58px", padding: "6px 6px", borderRadius: "4px", cursor: "pointer",
-      fontSize: "12px", fontWeight: "600", border: "1px solid", borderLeft: "4px solid " + color }, text);
+  const button = (text, color, tip, onClick, extra) => {
+    const b = el("button", Object.assign({ flex: "1 1 auto", minWidth: "58px", padding: "7px 6px", borderRadius: "4px", cursor: "pointer",
+      fontSize: "12px", fontWeight: "600", border: "none", background: color, color: "#ffffff" }, extra || {}), text);
     b.title = tip || "";
     b.addEventListener("click", onClick);
-    buttons.push(b);
+    b.addEventListener("mousedown", () => { b.style.filter = "brightness(0.8)"; });
+    ["mouseup", "mouseleave"].forEach((ev) => b.addEventListener(ev, () => { b.style.filter = ""; }));
     return b;
   };
+  const muted = [];
   const row = (title, items) => {
     const r = el("div", { display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" });
     const t = el("div", { width: "64px", flex: "0 0 64px", fontSize: "11px" }, title);
-    t.dataset.muted = "1"; r.append(t, ...items); return r;
+    muted.push(t); r.append(t, ...items); return r;
   };
 
   const status = el("div", { fontVariantNumeric: "tabular-nums", minHeight: "16px" }, "no status yet");
   root.append(status);
-  root.append(row("operator", OPS.map(([n, c, tip]) => button(n, c, tip, () => publish(TOPICS.operator, n)))));
-  root.append(row("obstacles", OBSTACLES.map(([n, c]) => button(n, c, "what the fields are made of (only while standing)",
-    () => publish(TOPICS.obstacles, n)))));
+
+  // operator + obstacles on the left, one big DAMP on the right
+  const top = el("div", { display: "flex", gap: "8px", alignItems: "stretch" });
+  const left = el("div", { display: "flex", flexDirection: "column", gap: "6px", flex: "1 1 auto", minWidth: "0" });
+  left.append(row("operator", OPS.filter(([n]) => n !== "damp").map(([n, c, tip]) => button(n, c, tip, () => publish(TOPICS.operator, n)))));
+  const obstacleButtons = {};
+  left.append(row("obstacles", OBSTACLES.map(([n, c]) => (obstacleButtons[n] = button(n, c, "what the fields are made of (only while standing)",
+    () => publish(TOPICS.obstacles, n))))));
+  const damp = button("DAMP", "#e02020", "DAMP from any state (L2+B on the remote is faster)", () => publish(TOPICS.operator, "damp"),
+    { flex: "0 0 84px", width: "84px", minHeight: "84px", fontSize: "18px", fontWeight: "800", letterSpacing: "1px", borderRadius: "8px",
+      boxShadow: "0 0 0 2px #7a0000 inset" });
+  top.append(left, damp);
+  root.append(top);
 
   // operator speed: published while dragging (at most every 150 ms) and on release
   const speedLabel = el("div", { width: "64px", flex: "0 0 64px", fontSize: "11px" }, "speed");
-  speedLabel.dataset.muted = "1";
+  muted.push(speedLabel);
   const speed = el("input", { flex: "1", minWidth: "80px" });
   Object.assign(speed, { type: "range", min: String(state.speedMin), max: String(state.speedMax), step: String(state.speedStep), value: "0.15" });
   const speedValue = el("div", { width: "86px", fontVariantNumeric: "tabular-nums" });
@@ -125,24 +162,50 @@ function initControls(context) {
   speedRow.append(speedLabel, speed, speedValue);
   root.append(speedRow);
 
-  if (state.scenes.length) {
-    root.append(row("scenes", state.scenes.map((s) => button(s, "#e0701a", "lay this scene out in front of the robot (only while standing)",
-      () => publish(TOPICS.scene, s)))));
+  // scenes: a list, each with a top-view preview (green start, red goal; amber = step over, blue = duck under, grey = walls)
+  const sceneItems = {};
+  if (scenes.length) {
+    const head = el("div", { fontSize: "11px", marginTop: "2px" }, "scenes (only while standing; laid out in front of the robot)");
+    muted.push(head); root.append(head);
+    const list = el("div", { display: "flex", flexDirection: "column", gap: "3px" });
+    for (const sc of scenes) {
+      const item = el("div", { display: "flex", alignItems: "center", gap: "8px", padding: "3px 6px", borderRadius: "4px", cursor: "pointer",
+        border: "1px solid transparent" });
+      item.title = sc.note || sc.name;
+      if (sc.boxes) item.append(scenePreview(sc, 96, 34));
+      const txt = el("div", { display: "flex", flexDirection: "column", minWidth: "0" });
+      txt.append(el("div", { fontWeight: "600", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, sc.name));
+      if (sc.note) { const n = el("div", { fontSize: "11px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, sc.note); muted.push(n); txt.append(n); }
+      item.append(txt);
+      item.addEventListener("click", () => publish(TOPICS.scene, sc.name));
+      sceneItems[sc.name] = item; list.append(item);
+    }
+    root.append(list);
   }
+
+  let current = { scene: null, obstacles: null };
+  const paint = () => {
+    root.style.background = colors.bg; root.style.color = colors.fg;
+    for (const n of muted) n.style.color = colors.muted;
+    for (const [name, item] of Object.entries(sceneItems)) {
+      const on = name === current.scene;
+      item.style.background = on ? colors.button : "transparent";
+      item.style.borderColor = on ? "#e0701a" : "transparent";
+    }
+    for (const [name, b] of Object.entries(obstacleButtons)) b.style.outline = name === current.obstacles ? "2px solid " + colors.fg : "none";
+  };
 
   context.subscribe([{ topic: "/g1_wb/status" }]);
   context.watch("currentFrame");
   context.watch("colorScheme");
   context.onRender = (renderState, done) => {
     colors = theme(renderState.colorScheme);
-    root.style.background = colors.bg; root.style.color = colors.fg;
-    for (const b of buttons) Object.assign(b.style, { background: colors.button, color: colors.fg, borderColor: colors.border });
-    root.querySelectorAll("[data-muted]").forEach((n) => { n.style.color = colors.muted; });
     const frame = renderState.currentFrame || [];
     const last = frame.length ? frame[frame.length - 1] : null;
     if (last) {
       try {
         const s = JSON.parse(last.message.data);
+        current = { scene: s.scene, obstacles: s.obstacles };
         const latch = s.latch == null ? "-" : s.latch > 50 ? "walking" : s.latch > 0 ? "stopping" : "standing";
         const range = s.speed_range ? s.speed_range[0] + "-" + s.speed_range[1] : null;
         status.textContent = "mode " + s.mode + "  ·  " + latch +
@@ -155,8 +218,9 @@ function initControls(context) {
         if (s.speed == null) speedValue.textContent = "n/a";
       } catch (e) { /* not JSON yet */ }
     }
-    done();
+    paint(); done();
   };
+  paint();
   return () => { if (pending) clearTimeout(pending); };
 }
 

@@ -128,6 +128,8 @@ case "${1:-status}" in
     sleep 3; sudo docker logs "$wb_name" 2>&1 | tail -5 ;;
   viz)              # Foxglove bridge for this stack: the CAT viewer image, writable only for /g1_wb/{operator,scene,obstacle_mode,goal_pose,speed}
     vz=g1-rr-rosbridge
+    # only our topics in Foxglove's list (the robot has ~150, mostly Unitree's /api/* and /lf/*); G1_VIZ_TOPICS='[*]' = all
+    viz_topics="${G1_VIZ_TOPICS:-[/g1_wb/*, /g1_slam/*, /tf, /tf_static, /rosout, /utlidar/cloud_livox_mid360, /initialpose]}"
     if [[ "${2:-start}" == stop ]]; then
       exists "$vz" && { sudo docker stop --time 3 "$vz" >/dev/null; sudo docker rm "$vz" >/dev/null; }; echo "viewer bridge stopped"; exit 0
     fi
@@ -138,7 +140,10 @@ case "${1:-status}" in
         --security-opt no-new-privileges:true --pids-limit 128 --cpus 1 --memory 2g --log-opt max-size=10m --log-opt max-file=2 \
         --tmpfs /tmp:rw,nosuid,nodev,size=64m --mount "type=bind,src=$dds,dst=/opt/cyclonedds.xml,readonly=true" \
         --mount "type=bind,src=$repo/real_robot/foxglove/rosbridge_protocol_wb.py,dst=/opt/rosbridge_overlay/python/rosbridge_library/rosbridge_protocol.py,readonly=true" \
-        -e CYCLONEDDS_URI=/opt/cyclonedds.xml -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" -e ROSBRIDGE_ADDRESS=127.0.0.1 g1-cat-rosbridge:latest >/dev/null
+        -e CYCLONEDDS_URI=/opt/cyclonedds.xml -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" --entrypoint bash g1-cat-rosbridge:latest -c \
+        "source /opt/ros/foxy/setup.bash; export PYTHONPATH=/opt/rosbridge_overlay/python:\$PYTHONPATH; exec ros2 launch rosbridge_server \
+         rosbridge_websocket_launch.xml port:=9090 address:=127.0.0.1 'topics_glob:=\"$viz_topics\"' \
+         'services_glob:=\"[/rosapi/*]\"' 'params_glob:=\"[/__disabled__]\"'" >/dev/null
     fi
     for _ in $(seq 1 20); do ss -lnt | grep -q "127.0.0.1:9090 " && { echo "viewer bridge on 127.0.0.1:9090 (writable: /g1_wb/operator, scene, obstacle_mode, goal_pose, speed)"; exit 0; }; sleep 1; done
     echo "viewer bridge did not start" >&2; sudo docker logs --tail 20 "$vz" >&2; exit 5 ;;

@@ -81,7 +81,7 @@ def gantry_schedule(t_go=11.0):
 def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0, 0.5, 0.4), seconds=40.,
         procedure='gantry', pose_hz=10., pose_latency_s=0.06, pose_noise=0.01, action_latency_s=0.010,
         field_latency_s=2.5, field_period_s=1.0, motor_kp_scale=0.9, true_mount='unitree_urdf', exec_mount='unitree_urdf',
-        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True, upper_filter='none', upper_alpha=0.5, upper_cutoff_hz=6.0, upper_rate=0.5, field_workers=1, stop_at_goal=True):
+        events=(), seed=0, video=None, assets=None, fence_margin=1.0, physical=False, imu_heading=True, upper_filter='none', upper_alpha=0.5, upper_cutoff_hz=6.0, upper_rate=0.5, field_workers=1, stop_at_goal=True, record=None):
     contract = load_contract(); kin = FastKinematics(contract)
     clock = SimClock()
     scene_obj = VirtualScene(scene, anchor=anchor)
@@ -160,6 +160,8 @@ def run(scene='sidegap_corridor_048', policy='robust_delay_v1_u150', anchor=(1.0
                 robot.time += contract['physics_dt']; continue
             robot.step()
         pos, quat = robot.pelvis
+        if record is not None and k % 2 == 0:               # (time, qpos) at 25 Hz, e.g. for a simulated lidar offline
+            record.append((now, robot.data.qpos.copy()))
         if k % 5 == 0:
             log.setdefault('track', []).append((round(now, 2), float(pos[0]), float(pos[1]),
                                                 int(ex.builder.stop) if ex.builder_ready else -1))

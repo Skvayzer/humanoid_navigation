@@ -13,6 +13,7 @@ Outputs  /lowcmd (unitree_hg/LowCmd) ONLY in STAND_UP/STAND/POLICY/DAMP and only
 Without --active the node can never publish /lowcmd (the publisher is not even created).
 """
 import argparse
+import collections
 import array
 import json
 import signal
@@ -54,6 +55,10 @@ def parse(argv=None):
     p.add_argument('--kp-scale', type=float, default=1.0)
     p.add_argument('--obstacles', choices=OBSTACLE_MODES, default='virtual', help='what the fields are made of at start')
     p.add_argument('--field-workers', type=int, default=2, help='solver processes (joystick mode solves this many goals at once)')
+    p.add_argument('--self-filter', choices=('mesh', 'capsules'), default='mesh',
+                   help="lidar points of the robot itself: the meshes posed at each point's scan time, or the old capsules")
+    p.add_argument('--grip-radius', type=float, default=0.,
+                   help='> 0: points this close to a palm are part of the robot too (an object held in the hand)')
     p.add_argument('--no-dynamic', action='store_true', help="with --static-map: obstacles = the map only, no lidar layer")
     p.add_argument('--static-map', help="static ESDF npz (esdf_layers) of the room: 'real' / 'both' = this map + the lidar's last 0.5 s")
     p.add_argument('--upper-filter', choices=('none', 'avg2', 'avg3', 'median3', 'ema', 'butter2', 'rate'), default='none', help='waist/arm command filter (policy dithering)')
@@ -248,7 +253,10 @@ class Bridge:
         if item is None or t_map_odom is None or time.monotonic() - item[1] > max_age_s:
             return None
         pts = cloud_xyz_from_cdr(item[0])
-        return None if pts is None else pts @ t_map_odom[:3, :3].T + t_map_odom[:3, 3]
+        if pts is None:
+            return None
+        xyz = pts[:, :3] @ t_map_odom[:3, :3].T + t_map_odom[:3, 3]
+        return xyz if pts.shape[1] == 3 else np.column_stack([xyz, pts[:, 3]])     # + each point's scan time (system clock)
 
     def take_world(self):
         with self.lock:
@@ -365,8 +373,9 @@ class Bridge:
 
 
 def cloud_xyz_from_cdr(raw):
-    """x, y, z of a little-endian CDR PointCloud2 with point_step 12 and only x/y/z float32 (what cloud_relay sends),
-    without deserialising it in Python. None when the bytes do not look like that."""
+    """x, y, z [N, 3] of a little-endian CDR PointCloud2 of float32 x/y/z (point_step 12), or [N, 4] x, y, z, time when
+    it carries cloud_relay's t field (point_step 16: the time becomes absolute, header stamp + t), without deserialising
+    it in Python. None when the bytes do not look like that."""
     b = bytes(raw)
     if len(b) < 40 or b[:2] != b'\x00\x01':
         return None
@@ -374,11 +383,17 @@ def cloud_xyz_from_cdr(raw):
     (flen,) = struct.unpack_from('<I', pay, 8)
     off = (12 + flen + 3) & ~3
     height, width = struct.unpack_from('<II', pay, off)
-    n = height * width; size = 12 * n
-    for pad in range(4):                                   # data, then is_dense (1 byte), then maybe alignment
-        end = len(pay) - 1 - pad; start = end - size
-        if start >= 4 and struct.unpack_from('<I', pay, start - 4)[0] == size:
-            return np.frombuffer(pay, '<f4', count=3 * n, offset=start).reshape(n, 3).astype(float)
+    n = height * width
+    sec, nsec = struct.unpack_from('<iI', pay, 0)
+    for step in (12, 16):
+        size = step * n
+        for pad in range(4):                               # data, then is_dense (1 byte), then maybe alignment
+            end = len(pay) - 1 - pad; start = end - size
+            if start >= 4 and struct.unpack_from('<I', pay, start - 4)[0] == size:
+                pts = np.frombuffer(pay, '<f4', count=step // 4 * n, offset=start).reshape(n, step // 4).astype(float)
+                if step == 16:
+                    pts[:, 3] += sec + 1e-9 * nsec
+                return pts
     return None
 
 
@@ -428,9 +443,17 @@ def main(argv=None):
     ex = rn.Executor(contract, kin, infer, FieldPlanner(scene), worker, cfg)
     worker.points_source = bridge.obstacle_points
 
+    history = collections.deque(maxlen=12)              # (system time, q, pelvis pos, quat) at 10 Hz: the lidar's rate
+
     def body_now():
-        pelvis = ex._pelvis(ex.state) if ex.state is not None else None
-        return None if pelvis is None else body_capsules(kin, ex.state.q, pelvis[0], pelvis[1])
+        if args.self_filter == 'capsules':
+            pelvis = ex._pelvis(ex.state) if ex.state is not None else None
+            return None if pelvis is None else body_capsules(kin, ex.state.q, pelvis[0], pelvis[1])
+        if not history:
+            return None
+        h = list(history)
+        return dict(t=np.array([x[0] for x in h]), q=np.array([x[1] for x in h]), pos=np.array([x[2] for x in h]),
+                    quat=np.array([x[3] for x in h]), grip=args.grip_radius, rope=h[-1][2])
     worker.body_source = body_now
     world = dict(scene=scene, scenes=available_scenes())
 
@@ -502,6 +525,10 @@ def main(argv=None):
                 slam_log = np.r_[pose[0][:3, 3], matrix_quat(pose[0][:3, :3])]; slam_stamp = pose[1]
             for c in cmds:
                 ok = ex.command(c); log.info('operator %s -> %s (%s)' % (c, 'ok' if ok else 'refused', ex.reason))
+            if n % 5 == 0 and ex.state is not None and ex.pose is not None:     # the self-filter's pose history
+                pelvis = ex._pelvis(ex.state)
+                if pelvis is not None:
+                    history.append((time.time(), np.array(ex.state.q, float), pelvis[0].copy(), np.asarray(pelvis[1], float)))
             for kind, value in bridge.take_world():
                 apply_world(kind, value)
             cmd = ex.step(now)

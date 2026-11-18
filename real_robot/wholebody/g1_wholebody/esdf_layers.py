@@ -15,6 +15,7 @@
 """
 import argparse
 import math
+from pathlib import Path
 
 import numpy as np
 
@@ -124,24 +125,152 @@ def body_capsules(kin, q, pos, quat):
     return np.array(a), np.array(b), np.array(r)
 
 
+SURFACE_MARGIN_M = 0.04       # a lidar point this close to the robot's mesh surface is the robot (lidar noise ~2 cm)
+SCAN_SWEEP_S = 0.05           # a lidar point's time = its scan's centre +- half a scan (10 Hz): see BodySurface.inside
+BODY_POINTS = Path(__file__).with_name('body_points.npz')      # tools/make_body_points.py
+
+
+class BodySurface:
+    """The robot's own surface (visual meshes of the training model, ~1 cm points per body) for the lidar self-filter.
+    inside() tests each lidar point against the body posed at that point's own time (the nearest snapshot of the
+    history), so a moving arm leaves no trail; grip_radius > 0 also drops everything that close to a palm (an object
+    held in the hand: treated as part of the robot)."""
+
+    REACH_M = 1.2                 # no part of the robot is farther from its pelvis (arms stretched: ~0.9 m)
+    TIME_STEP_S = 0.05            # point times are grouped to this step (one posed body per group): the sweep's step
+
+    def __init__(self, kin, path=BODY_POINTS, margin=SURFACE_MARGIN_M):
+        from scipy.spatial import cKDTree
+        d = np.load(path); names = [str(n) for n in d['names']]; pts, body = d['points'], d['body']
+        known = set(kin.frames(np.zeros(29))[0])
+        self.kin, self.margin, self.bodies = kin, float(margin), []
+        for i, n in enumerate(names):
+            if n not in known:
+                continue
+            p = pts[body == i].astype(float); c = p.mean(0)
+            self.bodies.append((n, cKDTree(p), c, float(np.linalg.norm(p - c, axis=1).max()) + margin))
+        self.palms = [n for n in kin.site_names if 'palm' in n]
+        self.radii2 = np.array([r * r for _, _, _, r in self.bodies])
+        self._memo = {}
+
+    def posed(self, q, pos, quat):
+        from wholebody_core import quat_matrix
+        bodies, sites, _ = self.kin.frames(np.asarray(q, float))
+        base = np.eye(4); base[:3, :3] = quat_matrix(quat); base[:3, 3] = pos
+        return {n: base @ t for n, t in bodies.items()}, [(base @ sites[n])[:3, 3] for n in self.palms]
+
+    def inside(self, points, history, grip_radius=0., sweep=0.):
+        """points [N, 3] (or [N, 4] with the point's time in the history's clock); history: dict t [K], q [K, 29],
+        pos [K, 3], quat [K, 4]. Returns a bool mask of the points that are the robot. sweep > 0: a point's time is only
+        known to +-sweep s (on the robot: its scan's), so it is tested against the body at t - sweep, t, t + sweep
+        (joints and pelvis interpolated between the history's snapshots): the volume the body swept meanwhile."""
+        p = np.asarray(points, float); out = np.zeros(len(p), bool)
+        if len(p) == 0:
+            return out
+        # only points near the robot can be the robot: within REACH_M (horizontally) of any recent pelvis position
+        pel = np.asarray(history['pos'], float)[:, :2]; reach = self.REACH_M + max(grip_radius, 0.)
+        lo, hi = pel.min(0) - reach, pel.max(0) + reach                 # a box round the recent pelvis positions
+        near = np.flatnonzero(((p[:, :2] >= lo) & (p[:, :2] <= hi)).all(1))
+        if len(near) == 0:
+            return out
+        q = p[near]; t = np.asarray(history['t'], float)
+        if q.shape[1] > 3 and len(t) > 1:
+            # a point whose time interval the history fully covers keeps its answer: cache it (a refresh brings ~one new
+            # scan in five, so most points were judged by the previous one); key: 1 cm cell, 1 ms, grip, sweep
+            keys = [(int(a), int(b), int(c), int(d), grip_radius, sweep) for a, b, c, d in
+                    np.column_stack([np.floor(q[:, :3] * 100.), np.round(q[:, 3] * 1000.)])]
+            hit = np.array([self._memo.get(k, -1) for k in keys], np.int8)
+            todo = np.flatnonzero(hit < 0)
+            if len(todo):
+                offsets = (-sweep, 0., sweep) if sweep > 0 else (0.,)
+                rep = len(offsets)                                         # all shifted copies at once: one pose per key
+                stacked = self._inside_at(np.tile(q[todo, :3], (rep, 1)),
+                                          np.concatenate([q[todo, 3] + dt for dt in offsets]), history, grip_radius)
+                res = stacked.reshape(rep, len(todo)).any(0); hit[todo] = res
+                final = q[todo, 3] + sweep <= t[-1]
+                for i in np.flatnonzero(final):
+                    self._memo[keys[todo[i]]] = bool(res[i])
+                if len(self._memo) > 200000:                               # old scans leave the window: forget them
+                    horizon = int(round((t[-1] - 2.) * 1000.))
+                    self._memo = {k: v for k, v in self._memo.items() if k[3] > horizon}
+            hit = hit.astype(bool)
+        else:
+            hit = self._inside_at(q[:, :3], None, history, grip_radius)
+        out[near] = hit
+        return out
+
+    def _inside_at(self, xyz_all, times, history, grip_radius):
+        """Each point against the body interpolated at its time (None: the newest snapshot); times rounded to 10 ms."""
+        t = np.asarray(history['t'], float); out = np.zeros(len(xyz_all), bool)
+        if times is None or len(t) < 2:
+            keys = np.full(len(xyz_all), t[-1])
+        else:
+            keys = np.round(np.clip(times, t[0], t[-1]) / self.TIME_STEP_S) * self.TIME_STEP_S
+        for key in np.unique(keys):
+            idx = np.flatnonzero(keys == key); xyz = xyz_all[idx]
+            j = int(np.clip(np.searchsorted(t, key), 1, len(t) - 1)) if len(t) > 1 else 0
+            a = 0. if len(t) < 2 else float(np.clip((key - t[j - 1]) / max(t[j] - t[j - 1], 1e-9), 0., 1.))
+            i0 = j - 1 if len(t) > 1 else 0
+            mix = lambda v: (1 - a) * np.asarray(v[i0], float) + a * np.asarray(v[j], float)
+            quat = mix(history['quat']); quat /= np.linalg.norm(quat)
+            frames, palms = self.posed(mix(history['q']), mix(history['pos']), quat)
+            hit = np.zeros(len(idx), bool)
+            centres = np.array([frames[n][:3, :3] @ c + frames[n][:3, 3] for n, _, c, _ in self.bodies])
+            diff = xyz[:, None, :] - centres[None]
+            close = np.einsum('pbk,pbk->pb', diff, diff) < self.radii2[None]        # [points, bodies]
+            for b in np.flatnonzero(close.any(0)):
+                name, tree, c, r = self.bodies[b]; near = np.flatnonzero(close[:, b] & ~hit)
+                if len(near) == 0:
+                    continue
+                T = frames[name]; local = (xyz[near] - T[:3, 3]) @ T[:3, :3]
+                d, _ = tree.query(local, distance_upper_bound=self.margin)
+                hit[near[np.isfinite(d)]] = True
+            if grip_radius > 0:
+                for palm in palms:
+                    hit |= np.linalg.norm(xyz - palm, axis=1) < grip_radius
+            out[idx] = hit
+        return out
+
+
+_SURFACE = {}
+
+
+def body_surface():
+    """One BodySurface per process (the solver workers build it on first use)."""
+    if 'surface' not in _SURFACE:
+        from wholebody_core import load_contract
+        from .kinematics import FastKinematics
+        _SURFACE['surface'] = BodySurface(FastKinematics(load_contract()))
+    return _SURFACE['surface']
+
+
 def band(points, z_range=REAL_Z):
     """Points in the obstacle height band (cheap; first, so that the body test sees no floor)."""
     if points is None or len(points) == 0:
         return points
-    p = np.asarray(points, np.float32)
+    p = np.asarray(points)
     return p[(p[:, 2] > z_range[0]) & (p[:, 2] < z_range[1])]
 
 
 def remove_body(points, body):
-    """Drop points inside the body capsules (only points in the capsules' bounding box are tested)."""
+    """Drop the robot's own points. body: capsules (a, b, r) from body_capsules (the legacy filter), or a dict from the
+    executor's pose history: dict(t, q, pos, quat, grip, rope) -> the mesh filter at each point's own time (BodySurface),
+    plus the gantry rope column. points [N, 3] or [N, 4] (x, y, z, time); the time column is kept."""
     if points is None or len(points) == 0 or body is None:
         return points
+    if isinstance(body, dict):
+        p = np.asarray(points)
+        keep = ~body_surface().inside(p, body, body.get('grip', 0.), body.get('sweep', SCAN_SWEEP_S))
+        rope = body.get('rope')
+        if rope is not None:                                                  # gantry rope: a column above the pelvis
+            keep &= ~((np.linalg.norm(p[:, :2] - np.asarray(rope)[:2], axis=1) < ROPE_RADIUS_M) & (p[:, 2] > ROPE_FROM_Z))
+        return p[keep]
     a, b, r = body
-    p = np.asarray(points, np.float32)
+    p = np.asarray(points)
     lo = np.minimum(a, b).min(0) - r.max(); hi = np.maximum(a, b).max(0) + r.max()
-    near = np.flatnonzero(((p >= lo) & (p <= hi)).all(1))
+    near = np.flatnonzero(((p[:, :3] >= lo) & (p[:, :3] <= hi)).all(1))
     if len(near):
-        q = p[near]
+        q = p[near, :3].astype(np.float32)
         ab = (b - a).astype(np.float32); L2 = np.maximum((ab * ab).sum(1), 1e-12)
         t = np.clip(((q[:, None, :] - a[None]) * ab[None]).sum(-1) / L2, 0., 1.)
         d = np.linalg.norm(q[:, None, :] - (a[None] + t[..., None] * ab[None]), axis=-1)
@@ -155,7 +284,7 @@ def dynamic_voxels(points, first, shape, base_sdf=None, static_match=STATIC_MATC
     """Window voxel indices [M, 3] of the points that the base layer does not explain."""
     if points is None or len(points) == 0:
         return np.zeros((0, 3), int)
-    p = np.asarray(points, float)
+    p = np.asarray(points, float)[:, :3]
     p = p[(p[:, 2] > z_range[0]) & (p[:, 2] < z_range[1])]
     idx = np.floor((p - (np.asarray(first) - DX / 2)) / DX).astype(int)
     idx = idx[(idx >= 0).all(1) & (idx < np.asarray(shape)).all(1)]

@@ -57,7 +57,7 @@ def points_occupancy(points, first_center, shape, z_range=REAL_Z):
     occ = np.zeros(shape, bool)
     if points is None or len(points) == 0:
         return occ
-    p = np.asarray(points, float)
+    p = np.asarray(points, float)[:, :3]
     idx = np.floor((p - (np.asarray(first_center) - DX / 2)) / DX).astype(int)
     ok = (idx >= 0).all(1) & (idx < np.asarray(shape)).all(1) & (p[:, 2] > z_range[0]) & (p[:, 2] < z_range[1])
     occ[tuple(idx[ok].T)] = True
@@ -326,7 +326,7 @@ class FieldWorker:
             self.last_error = 'no fresh real obstacle cloud'
             return None
         body = self.body_source() if self.body_source is not None else None
-        return np.asarray(points, np.float32), body
+        return np.asarray(points, float), body          # float64: column 3 may be an absolute time
 
     def set_world(self, mode=None, scene=None):
         """Switch the obstacle source and/or the virtual scene. Answers to requests made before are dropped."""

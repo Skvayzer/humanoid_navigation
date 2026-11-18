@@ -178,6 +178,7 @@ class Bridge:
         self.node.create_subscription(String, '/g1_wb/operator', self._operator, 10)
         self.node.create_subscription(String, '/g1_wb/scene', lambda m: self._world('scene', m.data.strip()), 5)
         self.node.create_subscription(String, '/g1_wb/obstacle_mode', lambda m: self._world('obstacles', m.data.strip().lower()), 5)
+        self.node.create_subscription(String, '/g1_wb/speed', lambda m: self._world('speed', m.data.strip()), 5)   # operator speed, m/s
         self.node.create_subscription(PoseStamped, '/g1_wb/goal_pose', self._goal, 5)
         # raw: one callback = store the bytes (the cloud is parsed only when a field request needs it)
         self.node.create_subscription(PointCloud2, '/g1_slam/obstacles', self._obstacles, QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT), raw=True)
@@ -483,13 +484,32 @@ def main(argv=None):
     worker.body_source = body_now
     world = dict(scene=scene, scenes=available_scenes())
 
+    def set_speed(text):
+        """Operator speed from the viewer: only for operator-speed policies, inside their trained range."""
+        rule = (contract.get('command') or {}).get('rule', 'field_speed')
+        if rule != 'operator_speed':
+            return False, 'refused speed: this policy walks at its field speed'
+        try:
+            v = float(text)
+        except ValueError:
+            return False, 'refused speed %r: not a number' % text
+        low, high = contract['command']['trained_speed_m_s']
+        if not low <= v <= high:
+            return False, 'refused speed %.2f: trained %.2f-%.2f m/s' % (v, low, high)
+        ex.cfg.speed = v; ex.builder.speed = v
+        return True, 'speed %.2f m/s' % v
+
     def show_world():
         bridge.publish_scene(world['scene'], ex.planner.waypoints, fence, start=ex.planner.route_start,
                              boxes=worker.mode != 'real')
 
     def apply_world(kind, value):
-        """Viewer commands that change what the policy walks in or towards. Never while walking."""
+        """Viewer commands that change what the policy walks in or towards. Never while walking (the speed: any time)."""
         walking = ex.mode == rn.POLICY and ex.planner.hold_xy is None
+        if kind == 'speed':
+            ok, ex.reason = set_speed(value)
+            log.info('speed %s -> %s (%s)' % (value, 'ok' if ok else 'refused', ex.reason))
+            return
         if kind == 'goal':
             ok = ex.set_goal(value)
         elif walking:
@@ -587,7 +607,8 @@ def main(argv=None):
                               field_goal=None if ex.field_goal is None else np.round(np.asarray(ex.field_goal)[:2], 2).tolist(),
                               field_hold=ex.field_hold, latch=int(ex.builder.stop) if ex.builder_ready else None,
                               obstacles=worker.mode, scene=world['scene'].name, scenes=world['scenes'],
-                              goal_xy=None if ex.planner.operator_goal is None else np.round(ex.planner.operator_goal, 2).tolist())
+                              goal_xy=None if ex.planner.operator_goal is None else np.round(ex.planner.operator_goal, 2).tolist(),
+                              speed=ex.cfg.speed, speed_range=(contract.get('command') or {}).get('trained_speed_m_s'))
                 bridge.status.publish(bridge.String(data=json.dumps(status)))
                 if ex.state is not None and ex.pose is not None:
                     pos, quat, _ = ex._pelvis(ex.state)

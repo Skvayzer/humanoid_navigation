@@ -62,7 +62,8 @@ class RosbridgeProtocol(Protocol):
         # real_robot copy (bind-mounted over the overlay's file by g1.sh viz): Foxglove may also write the whole-body
         # executor's viewer inputs -- operator commands, scene, obstacle mode, goal. Never /lowcmd or anything else:
         # every motor command still goes through the executor's own checks.
-        writable = ["/g1_nav/goal_pose", "/g1_wb/operator", "/g1_wb/scene", "/g1_wb/obstacle_mode", "/g1_wb/goal_pose"]
+        writable = ["/g1_nav/goal_pose", "/g1_wb/operator", "/g1_wb/scene", "/g1_wb/obstacle_mode", "/g1_wb/goal_pose",
+                    "/g1_wb/speed"]
         Advertise.topics_glob = list(writable)
         Publish.topics_glob = list(writable)
         Protocol.__init__(self, client_id, node_handle)

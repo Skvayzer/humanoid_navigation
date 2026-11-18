@@ -126,7 +126,7 @@ case "${1:-status}" in
       --mount "type=bind,src=$repo/cat/wholebody,dst=/opt/wb/cat/wholebody,readonly=true" \
       "$wb_image" run "$@" "${extra[@]}" --log-dir /data/logs >/dev/null
     sleep 3; sudo docker logs "$wb_name" 2>&1 | tail -5 ;;
-  viz)              # Foxglove bridge for this stack: the CAT viewer image, writable only for /g1_wb/{operator,scene,obstacle_mode,goal_pose}
+  viz)              # Foxglove bridge for this stack: the CAT viewer image, writable only for /g1_wb/{operator,scene,obstacle_mode,goal_pose,speed}
     vz=g1-rr-rosbridge
     if [[ "${2:-start}" == stop ]]; then
       exists "$vz" && { sudo docker stop --time 3 "$vz" >/dev/null; sudo docker rm "$vz" >/dev/null; }; echo "viewer bridge stopped"; exit 0
@@ -140,7 +140,7 @@ case "${1:-status}" in
         --mount "type=bind,src=$repo/real_robot/foxglove/rosbridge_protocol_wb.py,dst=/opt/rosbridge_overlay/python/rosbridge_library/rosbridge_protocol.py,readonly=true" \
         -e CYCLONEDDS_URI=/opt/cyclonedds.xml -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" -e ROSBRIDGE_ADDRESS=127.0.0.1 g1-cat-rosbridge:latest >/dev/null
     fi
-    for _ in $(seq 1 20); do ss -lnt | grep -q "127.0.0.1:9090 " && { echo "viewer bridge on 127.0.0.1:9090 (writable: /g1_wb/operator, scene, obstacle_mode, goal_pose)"; exit 0; }; sleep 1; done
+    for _ in $(seq 1 20); do ss -lnt | grep -q "127.0.0.1:9090 " && { echo "viewer bridge on 127.0.0.1:9090 (writable: /g1_wb/operator, scene, obstacle_mode, goal_pose, speed)"; exit 0; }; sleep 1; done
     echo "viewer bridge did not start" >&2; sudo docker logs --tail 20 "$vz" >&2; exit 5 ;;
   demo)             # AR camera + bag of the viewer topics, one take per walk -> runtime/demo/<time>/{ar.mp4,bag}
     dm=g1-rr-demo; mkdir -p "$workspace/runtime/demo"

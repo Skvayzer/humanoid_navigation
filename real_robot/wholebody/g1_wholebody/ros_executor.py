@@ -61,8 +61,11 @@ def parse(argv=None):
     p.add_argument('--kp-scale', type=float, default=1.0)
     p.add_argument('--obstacles', choices=OBSTACLE_MODES, default='virtual', help='what the fields are made of at start')
     p.add_argument('--field-workers', type=int, default=2, help='solver processes (joystick mode solves this many goals at once)')
-    p.add_argument('--self-filter', choices=('mesh', 'capsules'), default='mesh',
-                   help="lidar points of the robot itself: the meshes posed at each point's scan time, or the old capsules")
+    p.add_argument('--self-filter', choices=('both', 'mesh', 'capsules'), default='both',
+                   help="lidar points of the robot itself: the meshes posed over each point's scan time, the old capsules "
+                        "(last pose), or both (a point either calls the robot is dropped)")
+    p.add_argument('--self-sweep', type=float, default=0.15,
+                   help='mesh filter: a point is tested against the body over its scan time +- this many seconds')
     p.add_argument('--rope-radius', type=float, default=0.5,
                    help='lidar points above 1 m within this of the pelvis axis are the gantry rope / harness, not obstacles')
     p.add_argument('--grip-radius', type=float, default=0.,
@@ -495,7 +498,9 @@ def main(argv=None):
             return None
         h = list(history)
         return dict(t=np.array([x[0] for x in h]), q=np.array([x[1] for x in h]), pos=np.array([x[2] for x in h]),
-                    quat=np.array([x[3] for x in h]), grip=args.grip_radius, rope=h[-1][2], rope_radius=args.rope_radius)
+                    quat=np.array([x[3] for x in h]), grip=args.grip_radius, rope=h[-1][2], rope_radius=args.rope_radius,
+                    sweep=args.self_sweep,
+                    capsules=(body_capsules(kin, h[-1][1], h[-1][2], h[-1][3], args.rope_radius) if args.self_filter == 'both' else None))
     worker.body_source = body_now
     world = dict(scene=scene, scenes=available_scenes())
 

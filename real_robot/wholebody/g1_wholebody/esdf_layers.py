@@ -266,7 +266,10 @@ def remove_body(points, body):
         if rope is not None:                                                  # gantry rope: a column above the pelvis
             keep &= ~((np.linalg.norm(p[:, :2] - np.asarray(rope)[:2], axis=1) < body.get('rope_radius', ROPE_RADIUS_M))
                       & (p[:, 2] > ROPE_FROM_Z))
-        return p[keep]
+        p = p[keep]
+        if body.get('capsules') is not None:                                  # 'both': the capsules on top (generous)
+            p = remove_body(p, body['capsules'])
+        return p
     a, b, r = body
     p = np.asarray(points)
     lo = np.minimum(a, b).min(0) - r.max(); hi = np.maximum(a, b).max(0) + r.max()

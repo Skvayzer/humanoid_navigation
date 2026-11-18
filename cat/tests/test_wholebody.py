@@ -179,12 +179,13 @@ class WholeBodyTest(unittest.TestCase):
         import hashlib, json
         wholebody = Path(__file__).resolve().parents[1]/'wholebody'
         main = json.loads((wholebody/'policy_contract.json').read_text())
-        own = {'name', 'checkpoint_sha256', 'policy_onnx', 'robustness', 'command'}
+        own = {'name', 'checkpoint_sha256', 'policy_onnx', 'robustness', 'command', 'goal_seed'}
         try:
             import onnxruntime
         except ImportError:
             onnxruntime = None
-        for name in ('stationary_hands_S2far_u200', 'stationary_hands_S2far2_u330', 'stationary_hands_T2_u410', 'stationary_hands_E2_u300'):
+        for name in ('stationary_hands_S2far_u200', 'stationary_hands_S2far2_u330', 'stationary_hands_T2_u410', 'stationary_hands_E2_u300',
+                     'stationary_hands_V7_u100'):
             with self.subTest(policy=name):
                 folder = wholebody/name
                 variant = json.loads((folder/'policy_contract.json').read_text())

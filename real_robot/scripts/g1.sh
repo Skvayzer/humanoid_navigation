@@ -140,7 +140,9 @@ case "${1:-status}" in
       if ! exists "$fg"; then
         sudo docker run --detach --name "$fg" "${common[@]}" --cpus 1.5 --memory 768m --tmpfs /tmp:rw,nosuid,nodev,size=64m \
           --mount "type=bind,src=$repo/real_robot/config/foxglove_bridge.yaml,dst=/opt/foxglove_bridge.yaml,readonly=true" \
-          g1-rr-foxglove:latest >/dev/null
+          --mount "type=bind,src=$repo/real_robot/config/viz_domain_bridge.yaml,dst=/opt/viz_domain_bridge.yaml,readonly=true" \
+          --mount "type=bind,src=$repo/real_robot/config/cyclonedds_viz.xml,dst=/opt/cyclonedds_viz.xml,readonly=true" \
+          -e CYCLONEDDS_URI=/opt/cyclonedds_viz.xml g1-rr-foxglove:latest >/dev/null
       fi
       for _ in $(seq 1 20); do ss -lnt | grep -q "127.0.0.1:8765 " && { echo "foxglove_bridge on 127.0.0.1:8765 (tunnel: ssh -L 8765:127.0.0.1:8765; writable: /g1_wb/operator, scene, obstacle_mode, goal_pose, speed)"; exit 0; }; sleep 1; done
       echo "foxglove_bridge did not start" >&2; sudo docker logs --tail 20 "$fg" >&2; exit 5

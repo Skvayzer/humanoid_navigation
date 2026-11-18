@@ -1,14 +1,14 @@
 # foxglove_bridge for the real-robot stack (g1.sh viz): robot localhost only (reach it through an SSH tunnel), our
-# topics only, and the viewer may publish only the executor's operator inputs -- never /lowcmd or anything else.
+# topics only. Runs in DDS domain 7 behind domain_bridge (config/viz_domain_bridge.yaml).
 foxglove_bridge:
   ros__parameters:
     port: 8765
     address: 127.0.0.1
     topic_whitelist: ['^/g1_wb/.*', '^/g1_slam/.*', '^/tf$', '^/tf_static$', '^/rosout$', '^/utlidar/cloud_livox_mid360$']
     client_topic_whitelist: ['^/g1_wb/(operator|scene|obstacle_mode|goal_pose|speed)$']
-    # NO clientPublish: foxglove_bridge 3.6.3 ignores client_topic_whitelist (checked 2026-11-18: a non-listed topic
-    # was published into ROS), so the viewer must not be able to write at all
-    capabilities: [time]          # an empty list is rejected; time = sim time only, nothing writable
+    # clientPublish is safe only because the bridge sits in domain 7: viz_domain_bridge.yaml lets just the five operator
+    # topics back to the robot (this bridge's own client_topic_whitelist is NOT enforced in 3.6.3)
+    capabilities: [clientPublish]
     service_whitelist: ['^$']
     param_whitelist: ['^$']
     send_buffer_limit: 4000000      # bytes queued per client before old messages are dropped (a slow WiFi lags, not grows)

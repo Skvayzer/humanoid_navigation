@@ -44,14 +44,19 @@ def main():
     p.add_argument('--steps', type=int, default=320)
     p.add_argument('--operator-speed', type=float, nargs=2, metavar=('MIN', 'MAX'),
                    help='the policy was trained with an operator speed in [MIN, MAX] m/s: record it, so the executor demands --speed')
-    p.add_argument('--goal-seed', choices=('ball', 'column'), default='ball',
-                   help='goal seed the policy was trained with (column = goal projected onto the ground)')
+    p.add_argument('--goal-seed', choices=('ball', 'column'),
+                   help='goal seed the policy was trained with (column = goal projected onto the ground); default: the one '
+                        'recorded in deploy_spec.json environment_config, ball if none')
     args = p.parse_args()
 
     out = HERE/'wholebody'/args.name
     if out.exists():
         raise SystemExit(f'{out} exists: variants are never replaced, pick a new name')
     spec = json.loads((args.bundle/'deploy_spec.json').read_text())
+    trained_seed = ((spec.get('environment_config') or {}).get('goal_seed') or {}).get('mode', 'ball')
+    if args.goal_seed is not None and args.goal_seed != trained_seed:
+        raise SystemExit(f'--goal-seed {args.goal_seed}: the policy was trained with the {trained_seed} goal seed')
+    args.goal_seed = trained_seed
     main_contract = json.loads((HERE/'wholebody'/'policy_contract.json').read_text())
     rollouts = np.load(args.bundle/'reference_rollouts.npz')
 

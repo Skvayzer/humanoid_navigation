@@ -626,7 +626,7 @@ def main(argv=None):
                               field_error=worker.last_error, policy_wait=L.get('policy_wait'), active_allowed=args.active,
                               field_goal=None if ex.field_goal is None else np.round(np.asarray(ex.field_goal)[:2], 2).tolist(),
                               field_hold=ex.field_hold, latch=int(ex.builder.stop) if ex.builder_ready else None,
-                              obstacles=worker.mode, scene=world['scene'].name, scenes=world['scenes'],
+                              obstacles=worker.mode, scene=world['scene'].name,
                               goal_xy=None if ex.planner.operator_goal is None else np.round(ex.planner.operator_goal, 2).tolist(),
                               speed=ex.cfg.speed, speed_range=(contract.get('command') or {}).get('trained_speed_m_s'))
                 bridge.status.publish(bridge.String(data=json.dumps(status)))
@@ -642,12 +642,13 @@ def main(argv=None):
                     bridge.goal_pub.publish(bridge.pose_msg(args.map_frame, [g[0], g[1], GOAL_Z], [1, 0, 0, 0]))
             if n % 100 == 50 and bridge.scene_msg is not None:
                 bridge.scene_pub.publish(bridge.scene_msg)
-            if n % 50 == 25 and ex.fields is not None and ex.fields is not last_slice:
+            # viewer-only outputs: built (numpy + a copy of up to 0.6 MB, in the control thread) only when someone listens
+            if n % 50 == 25 and ex.fields is not None and ex.fields is not last_slice and bridge.slice_pub.get_subscription_count():
                 last_slice = ex.fields
                 bridge.publish_slice(ex.fields)
-            if n % 25 == 7:                                                                # 2 Hz: the lidar the fields use
+            if n % 25 == 7 and bridge.band_pub.get_subscription_count():                  # 2 Hz: the lidar the fields use
                 bridge.publish_band(history[-1][2] if history else None, args.rope_radius)
-            if n % 25 == 12 and ex.fields is not None and ex.fields is not last_cube:     # 2 Hz, only new fields
+            if n % 25 == 12 and ex.fields is not None and ex.fields is not last_cube and bridge.cube_pub.get_subscription_count():
                 last_cube = ex.fields
                 bridge.publish_cube(ex.fields)
     finally:

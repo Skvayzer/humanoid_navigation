@@ -95,7 +95,7 @@ def main():
             pts = voxel_down(pts, OBST_VOXEL)                # newest scans first: each voxel keeps its newest time
             pts = pts[np.linalg.norm(pts[:, :2] - sensor[0][:2], axis=1) < OBST_RADIUS_M]
             obst_pub.publish(xyzt_msg(PointCloud2, PointField, stamp.to_msg(), 'camera_init', pts))
-        if publish_map and now - last_map > MAP_PERIOD_S:
+        if publish_map and now - last_map > MAP_PERIOD_S and map_pub.get_subscription_count():   # merge only for a viewer
             last_map = now
             pts, hits = acc.merged()
             map_pub.publish(cloud_msg(PointCloud2, PointField, node.get_clock().now().to_msg(), 'camera_init',

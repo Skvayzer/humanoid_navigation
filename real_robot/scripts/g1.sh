@@ -135,7 +135,7 @@ case "${1:-status}" in
     exists "$vz" && ! running "$vz" && sudo docker rm "$vz" >/dev/null
     if ! exists "$vz"; then
       sudo docker run --detach --name "$vz" --network host --restart no --user "$(id -u):$(id -g)" --read-only --cap-drop ALL \
-        --security-opt no-new-privileges:true --pids-limit 128 --cpus 1 --memory 768m --log-opt max-size=10m --log-opt max-file=2 \
+        --security-opt no-new-privileges:true --pids-limit 128 --cpus 1 --memory 2g --log-opt max-size=10m --log-opt max-file=2 \
         --tmpfs /tmp:rw,nosuid,nodev,size=64m --mount "type=bind,src=$dds,dst=/opt/cyclonedds.xml,readonly=true" \
         --mount "type=bind,src=$repo/real_robot/foxglove/rosbridge_protocol_wb.py,dst=/opt/rosbridge_overlay/python/rosbridge_library/rosbridge_protocol.py,readonly=true" \
         -e CYCLONEDDS_URI=/opt/cyclonedds.xml -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" -e ROSBRIDGE_ADDRESS=127.0.0.1 g1-cat-rosbridge:latest >/dev/null

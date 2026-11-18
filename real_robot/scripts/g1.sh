@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One entry point for the whole-body pipeline on the G1 (run on the Jetson, from the repo checkout).
 #
-#   g1.sh build [slam|wholebody|all]          images (robot needs internet: README "Rebuilding")
+#   g1.sh build [slam|wholebody|demo|foxglove|all]          images (robot needs internet: README "Rebuilding")
 #   g1.sh load <archive.tar.gz>               images built on the laptop (laptop.sh build-robot) instead
 #   g1.sh validate                            offline tests inside the executor image (no network)
 #   g1.sh slam odom | mapping <name> | localize <name>      SLAM container g1-rr-slam (detached)
@@ -62,7 +62,9 @@ case "${1:-status}" in
     if [[ "$what" == wholebody || "$what" == all ]]; then
       sudo docker build --platform linux/arm64 -f "$(dockerfile "$repo/real_robot/docker/wholebody.Dockerfile")" --target runtime -t "$wb_image" "$repo"; fi
     if [[ "$what" == demo || "$what" == all ]]; then
-      sudo docker build --platform linux/arm64 -f "$(dockerfile "$repo/real_robot/docker/demo.Dockerfile")" --target runtime -t g1-rr-demo:latest "$repo"; fi ;;
+      sudo docker build --platform linux/arm64 -f "$(dockerfile "$repo/real_robot/docker/demo.Dockerfile")" --target runtime -t g1-rr-demo:latest "$repo"; fi
+    if [[ "$what" == foxglove || "$what" == all ]]; then
+      sudo docker build --platform linux/arm64 -f "$repo/real_robot/docker/foxglove.Dockerfile" -t g1-rr-foxglove:latest "$repo/real_robot/docker"; fi ;;
   load)             # images built on the laptop (laptop.sh build-robot): no robot internet, no compile here
     archive="${2:?archive from laptop.sh build-robot}"
     [[ "$(uname -m)" == aarch64 ]] || { echo "load is for the robot (arm64)" >&2; exit 2; }
@@ -126,7 +128,24 @@ case "${1:-status}" in
       --mount "type=bind,src=$repo/cat/wholebody,dst=/opt/wb/cat/wholebody,readonly=true" \
       "$wb_image" run "$@" "${extra[@]}" --log-dir /data/logs >/dev/null
     sleep 3; sudo docker logs "$wb_name" 2>&1 | tail -5 ;;
-  viz)              # Foxglove bridge for this stack: the CAT viewer image, writable only for /g1_wb/{operator,scene,obstacle_mode,goal_pose,speed}
+  viz)              # Foxglove bridge, writable only for /g1_wb/{operator,scene,obstacle_mode,goal_pose,speed}
+    fg=g1-rr-foxglove
+    if [[ "${G1_VIZ:-foxglove}" == foxglove ]]; then   # foxglove_bridge (C++, raw CDR): Foxglove "Foxglove WebSocket" ws://localhost:8765
+      if [[ "${2:-start}" == stop ]]; then
+        exists "$fg" && { sudo docker stop --time 3 "$fg" >/dev/null; sudo docker rm "$fg" >/dev/null; }
+        exists g1-rr-rosbridge && { sudo docker stop --time 3 g1-rr-rosbridge >/dev/null; sudo docker rm g1-rr-rosbridge >/dev/null; }
+        echo "viewer bridge stopped"; exit 0
+      fi
+      exists "$fg" && ! running "$fg" && sudo docker rm "$fg" >/dev/null
+      if ! exists "$fg"; then
+        sudo docker run --detach --name "$fg" "${common[@]}" --cpus 1.5 --memory 768m --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+          --mount "type=bind,src=$repo/real_robot/config/foxglove_bridge.yaml,dst=/opt/foxglove_bridge.yaml,readonly=true" \
+          g1-rr-foxglove:latest >/dev/null
+      fi
+      for _ in $(seq 1 20); do ss -lnt | grep -q "127.0.0.1:8765 " && { echo "foxglove_bridge on 127.0.0.1:8765 (tunnel: ssh -L 8765:127.0.0.1:8765; writable: /g1_wb/operator, scene, obstacle_mode, goal_pose, speed)"; exit 0; }; sleep 1; done
+      echo "foxglove_bridge did not start" >&2; sudo docker logs --tail 20 "$fg" >&2; exit 5
+    fi
+    # G1_VIZ=rosbridge: the old Python rosbridge (CAT viewer image) on 9090
     vz=g1-rr-rosbridge
     # only our topics in Foxglove's list (the robot has ~150, mostly Unitree's /api/* and /lf/*); G1_VIZ_TOPICS='[*]' = all
     viz_topics="${G1_VIZ_TOPICS:-[/g1_wb/*, /g1_slam/*, /tf, /tf_static, /rosout, /utlidar/cloud_livox_mid360, /initialpose]}"

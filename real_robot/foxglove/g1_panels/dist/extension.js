@@ -106,10 +106,16 @@ function initControls(context) {
   const root = context.panelElement;
   Object.assign(root.style, { display: "flex", flexDirection: "column", gap: "6px", padding: "6px 8px", height: "100%",
     boxSizing: "border-box", overflowY: "auto", fontFamily: "system-ui, sans-serif", fontSize: "12px" });
-  const advertised = new Set();
+  // the String type as the connection names it: "std_msgs/msg/String" (foxglove_bridge, ROS 2) or "std_msgs/String"
+  // (rosbridge): taken from the executor's /g1_wb/status
+  const advertised = new Map();
+  let stringType = "std_msgs/String";
   const publish = (topic, data) => {
     if (!context.publish) return;
-    if (!advertised.has(topic)) { context.advertise && context.advertise(topic, "std_msgs/String"); advertised.add(topic); }
+    if (advertised.get(topic) !== stringType) {
+      if (advertised.has(topic) && context.unadvertise) context.unadvertise(topic);
+      context.advertise && context.advertise(topic, stringType); advertised.set(topic, stringType);
+    }
     context.publish(topic, { data: String(data) });
   };
   let colors = theme("dark");
@@ -225,8 +231,11 @@ function initControls(context) {
   context.subscribe([{ topic: "/g1_wb/status" }]);
   context.watch("currentFrame");
   context.watch("colorScheme");
+  context.watch("topics");
   context.onRender = (renderState, done) => {
     colors = theme(renderState.colorScheme);
+    const st = (renderState.topics || []).find((t) => t.name === "/g1_wb/status");
+    if (st && st.schemaName) stringType = st.schemaName.includes("/msg/") ? "std_msgs/msg/String" : "std_msgs/String";
     const frame = renderState.currentFrame || [];
     const last = frame.length ? frame[frame.length - 1] : null;
     if (last) {

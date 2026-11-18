@@ -392,7 +392,7 @@ class Bridge:
         self.cube_pub.publish(m)
 
     def publish_band(self, rope_xy, rope_radius):
-        """/g1_slam/obstacles as the fields take it (before the body filter): map frame, 0.10-1.40 m (no floor, no
+        """/g1_slam/obstacles as the fields take it (before the body filter): map frame, 0.25-1.40 m (no floor, no
         ceiling), without the gantry-rope column; z doubles as intensity for the viewer."""
         pts = self.obstacle_points()
         if pts is None:

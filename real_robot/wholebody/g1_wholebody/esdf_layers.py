@@ -21,7 +21,7 @@ import numpy as np
 
 from wholebody_sim import DX, WINDOW
 
-REAL_Z = (0.10, 1.40)          # obstacle band: above the floor, below the window top (as sim's robot_perception)
+REAL_Z = (0.25, 1.40)          # obstacle band: above the floor, below the window top (as sim's robot_perception)
 DYN_RADIUS_M = 0.52            # dynamic distance truncation (just above the policy's 0.5 m sdf clip)
 STATIC_MATCH_M = 0.08          # a lidar voxel this close to the base layer's surface is the base layer (localisation error)
 BODY_RADIUS_M = 0.12           # around each limb segment / field site

@@ -130,9 +130,9 @@ def window_request(base_xy, goal_xy, occupancy):
     return first, occ, goal
 
 
-def solve_fields(base_xy, goal_xy, occupancy):
+def solve_fields(base_xy, goal_xy, occupancy, goal_seed='ball'):
     first, occ, goal = window_request(base_xy, goal_xy, occupancy)
-    return training_fields(occ, first, DX, goal), goal
+    return training_fields(occ, first, DX, goal, goal_seed=goal_seed), goal
 
 
 class FieldPlanner:
@@ -172,7 +172,7 @@ class FieldPlanner:
 _SHAPE = tuple(WINDOW)
 
 
-def _worker(requests, results, names, scene_spec, scene_kwargs):
+def _worker(requests, results, names, scene_spec, scene_kwargs, goal_seed='ball'):
     scene, mode = VirtualScene(scene_spec, **scene_kwargs), 'virtual'
     blocks = [shared_memory.SharedMemory(name=n) for n in names]
     views = [_views(b.buf) for b in blocks]
@@ -194,7 +194,7 @@ def _worker(requests, results, names, scene_spec, scene_kwargs):
         else:
             occupancy = lambda first, shape: scene.occupancy(first, shape) | points_occupancy(points, first, shape)
         try:
-            fields, goal = solve_fields(base_xy, goal_xy, occupancy)
+            fields, goal = solve_fields(base_xy, goal_xy, occupancy, goal_seed=goal_seed)
             sdf, gf, bf = views[slot]
             sdf[...] = fields.sdf; gf[...] = fields.gf; bf[...] = fields.bf
             results.put((seq, slot, fields.origin.tolist(), fields.dx, goal.tolist(), time.monotonic() - t, None))
@@ -217,8 +217,9 @@ class FieldWorker:
     the control loop is using is never written: each request takes a slot that is neither in use nor in flight.
     max_pending = how many requests may be solved at once (1 normally; up to n for the joystick's fast goals)."""
 
-    def __init__(self, scene, n=1, **scene_kwargs):
+    def __init__(self, scene, n=1, goal_seed='ball', **scene_kwargs):
         ctx = mp.get_context('spawn')                   # no fork of a process that has DDS threads
+        self.goal_seed = goal_seed
         size = 28 * int(np.prod(_SHAPE))
         self.n = max(1, int(n)); self.max_pending = 1
         self.blocks = [shared_memory.SharedMemory(create=True, size=size) for _ in range(self.n + 1)]
@@ -228,8 +229,8 @@ class FieldWorker:
         if isinstance(scene, VirtualScene):
             scene_kwargs = dict(anchor=(scene.offset[0], scene.offset[1], scene.yaw), anchor_at_start=False,
                                 robot_perception=scene.robot_perception)
-        self.processes = [ctx.Process(target=_worker, args=(q, self.results, [b.name for b in self.blocks], spec, scene_kwargs),
-                                      daemon=True) for q in self.queues]
+        self.processes = [ctx.Process(target=_worker, args=(q, self.results, [b.name for b in self.blocks], spec, scene_kwargs,
+                                                            goal_seed), daemon=True) for q in self.queues]
         for pr in self.processes:
             pr.start()
         self.in_use, self.flight, self.seq, self.delivered, self.turn = None, {}, 0, 0, 0

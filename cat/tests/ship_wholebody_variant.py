@@ -44,6 +44,8 @@ def main():
     p.add_argument('--steps', type=int, default=320)
     p.add_argument('--operator-speed', type=float, nargs=2, metavar=('MIN', 'MAX'),
                    help='the policy was trained with an operator speed in [MIN, MAX] m/s: record it, so the executor demands --speed')
+    p.add_argument('--goal-seed', choices=('ball', 'column'), default='ball',
+                   help='goal seed the policy was trained with (column = goal projected onto the ground)')
     args = p.parse_args()
 
     out = HERE/'wholebody'/args.name
@@ -90,6 +92,8 @@ def main():
         contract['command'] = dict(rule='operator_speed', trained_speed_m_s=[low, high], cutout_m_s=.05, nominal_m_s=.525,
                                    note='field direction at the operator speed (executor --speed), no stop latch; '
                                         'wholebody_core.command_from_fields(speed=...) = task._operator_command')
+    if args.goal_seed != 'ball':
+        contract['goal_seed'] = args.goal_seed
     out.mkdir(parents=True)
     shutil.copyfile(args.bundle/'policy.onnx', out/'policy.onnx')
     (out/'policy_contract.json').write_text(json.dumps(contract, indent=1)+'\n')

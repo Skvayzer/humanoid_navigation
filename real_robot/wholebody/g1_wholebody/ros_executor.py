@@ -50,6 +50,9 @@ def parse(argv=None):
     p.add_argument('--mount', default='unitree_urdf', choices=('unitree_urdf', 'robot_xml'))
     p.add_argument('--speed', type=float, help='operator speed in m/s, for policies trained with one (their policy_contract.json '
                    '"command" record, e.g. 0.1-0.6 m/s): the field gives the direction, this the speed; start low (0.15)')
+    p.add_argument('--goal-seed', choices=('ball', 'column'), help='field goal seed; default: the one in the policy contract '
+                   '("goal_seed", ball if absent). column = goal projected onto the ground (level guidance at the goal); '
+                   'overriding the trained seed is out of distribution: simulate first')
     p.add_argument('--active', action='store_true', help='allow motor commands (gantry procedure; see README)')
     p.add_argument('--start', choices=('idle', 'shadow'), default='idle')
     p.add_argument('--kp-scale', type=float, default=1.0)
@@ -417,7 +420,10 @@ def main(argv=None):
         m = args.geofence_from_scene; fence = (min(xs) - m, max(xs) + m, min(ys) - m, max(ys) + m)
     log.info('scene %s anchored at (%.2f, %.2f, %.1f deg); goal (%.2f, %.2f); geofence %s' %
              (scene.name, anchor[0], anchor[1], np.degrees(anchor[2]), scene.goal[0], scene.goal[1], fence))
-    worker = FieldWorker(scene, n=args.field_workers)
+    trained_seed = contract.get('goal_seed', 'ball'); goal_seed = args.goal_seed or trained_seed
+    if goal_seed != trained_seed:
+        log.warning('goal seed %s, but this policy was trained with %s: out of distribution, simulate first' % (goal_seed, trained_seed))
+    worker = FieldWorker(scene, n=args.field_workers, goal_seed=goal_seed)
     cfg = rn.Config(mount=args.mount, kp_scale=args.kp_scale, geofence=fence, allow_active=args.active, speed=getattr(args, 'speed', None),
                     upper_filter=args.upper_filter, upper_alpha=args.upper_alpha, upper_cutoff_hz=args.upper_cutoff_hz,
                     upper_rate=args.upper_rate)

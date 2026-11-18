@@ -114,6 +114,7 @@ def run(args):
     mujoco.mj_forward(model, data)
     waypoints = scene.waypoints(args.waypoint_spacing); active = 0
     builder = ObservationBuilder(contract, kin, frequency=args.frequency, speed=args.speed)
+    goal_seed = args.goal_seed or contract.get('goal_seed', 'ball')
 
     held = {'step': -1, 'noise': (np.zeros(2), 0.)}
     def pose():
@@ -149,7 +150,7 @@ def run(args):
         if not free[tuple(np.clip(np.round((goal[:2]-first[:2])/DX).astype(int), 0, np.array(WINDOW[:2])-1))]:
             idx = np.argwhere(free); target = np.round((goal[:2]-first[:2])/DX)
             goal[:2] = first[:2]+idx[np.argmin(((idx-target)**2).sum(-1))]*DX
-        fields = training_fields(occ, first, DX, goal); field_center, field_goal = center, goal
+        fields = training_fields(occ, first, DX, goal, goal_seed=goal_seed); field_center, field_goal = center, goal
     update_fields(data.qpos[:2].copy())
     gyro = data.sensordata[gyro_adr:gyro_adr+3].copy()
     obs = builder.reset(data.qpos[7:].copy(), *pose(), fields, dq=data.qvel[6:].copy(), gyro=gyro)
@@ -225,7 +226,7 @@ def run(args):
                   progress_m=round(float(data.qpos[0]-scene.start[0]), 3), contact_steps=int(contact_steps),
                   contact_bodies=dict(sorted(contact_parts.items(), key=lambda kv: -kv[1])[:6]),
                   settings=dict(pose_noise=args.pose_noise, pose_period=args.pose_period, pose_latency=args.pose_latency, action_delay=args.action_delay,
-                                action_latency_ms=args.action_latency_ms, kp_scale=kp_scale, robot_perception=args.robot_perception, ghost=args.ghost, frequency=args.frequency),
+                                action_latency_ms=args.action_latency_ms, kp_scale=kp_scale, robot_perception=args.robot_perception, ghost=args.ghost, frequency=args.frequency, goal_seed=goal_seed),
                   ms_per_step={k: round(1000*v/(step+1), 2) for k, v in timing.items()})
     if args.trace:
         np.savez_compressed(args.trace, **{k: np.asarray(v) for k, v in trace.items()}, waypoints=np.asarray(waypoints))
@@ -260,6 +261,7 @@ def main():
     p.add_argument('--advance-radius', type=float, default=.8)
     p.add_argument('--frequency', type=float, default=1.4, help='gait frequency (training: U(1.3, 1.5) Hz)')
     p.add_argument('--speed', type=float, help='operator speed (m/s) for policies trained with one; default: the field speed rule')
+    p.add_argument('--goal-seed', choices=('ball', 'column'), help='field goal seed (default: the contract\'s, ball if absent)')
     p.add_argument('--pose-noise', type=float, default=0., help='pelvis xy noise std (m) and yaw noise std (rad)')
     p.add_argument('--pose-latency', type=int, default=0, help='pose latency in control steps (20 ms)')
     p.add_argument('--pose-period', type=int, default=1, help='pose noise refreshed every N control steps (SLAM rate); 1 = every step')

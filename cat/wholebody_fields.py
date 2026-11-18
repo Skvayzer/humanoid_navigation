@@ -9,6 +9,13 @@ Differences from field_core.py (the preview port of the older pf.py) that the po
     its slow-down near the goal, never reached the policy);
   * values live on voxel CENTERS, returned as a FieldGrid whose grid points are those centers.
 Unknown space must be passed as occupied (conservative, as field_core): training never saw unknown cells.
+
+Goal seed. goal_seed='ball' (every policy trained before 2026-11-18): the arrival-time map starts from a 12 cm ball at
+the goal point, z = 0.75 m, so every guidance arrow points at that ball -- the head's tilts down and the feet's up by
+angles that only depend on the distance to the goal (head -17 / feet +24 deg at 1.5 m, -50 / +60 deg at 0.4 m on open
+floor). goal_seed='column' projects the goal onto the ground: the seed is the vertical column within 12 cm of the goal
+xy over the perceived heights (0.10-1.40 m), so near the goal the arrows stay level at every height while obstacles
+still bend them up or down. Use the seed the policy was trained with (policy_contract.json "goal_seed").
 """
 import numpy as np
 import skfmm
@@ -17,11 +24,16 @@ from wholebody_core import FieldGrid
 
 R_PROJ_CELLS = 5.          # tangential blending radius (pf_modular default 5 voxels)
 GOAL_SEED_RADIUS = .12     # pf_modular PFConfig.goal_seed_r
+GOAL_SEEDS = ('ball', 'column')
+COLUMN_Z = (.10, 1.40)     # column goal: the heights the robot perceives (robot perception volume)
 
 
-def training_fields(blocked, first_center, dx, goal):
+def training_fields(blocked, first_center, dx, goal, goal_seed='ball'):
     """blocked: bool [X,Y,Z] (occupied or unknown); first_center: world position of voxel (0,0,0)'s CENTER;
-    goal: world (x, y, z) -- training used z = 0.75 m. Returns FieldGrid on voxel centers."""
+    goal: world (x, y, z) -- training used z = 0.75 m (the column seed uses only x, y). Returns FieldGrid on voxel
+    centers."""
+    if goal_seed not in GOAL_SEEDS:
+        raise ValueError(f"goal_seed must be one of {GOAL_SEEDS}, got {goal_seed!r}")
     blocked = np.asarray(blocked, dtype=bool)
     origin = np.asarray(first_center, dtype=float); goal = np.asarray(goal, dtype=float)
     if blocked.ndim != 3 or min(blocked.shape) < 2 or not np.isfinite(origin).all() or not np.isfinite(goal).all():
@@ -36,7 +48,10 @@ def training_fields(blocked, first_center, dx, goal):
     bf = np.stack(np.gradient(sdf, dx, dx, dx, edge_order=2), axis=-1).astype(np.float32)
     axes = [origin[i]+np.arange(blocked.shape[i])*dx for i in range(3)]
     X, Y, Z = np.meshgrid(*axes, indexing='ij')
-    seed = ((X-goal[0])**2+(Y-goal[1])**2+(Z-goal[2])**2) <= GOAL_SEED_RADIUS**2
+    if goal_seed == 'ball':
+        seed = ((X-goal[0])**2+(Y-goal[1])**2+(Z-goal[2])**2) <= GOAL_SEED_RADIUS**2
+    else:
+        seed = (((X-goal[0])**2+(Y-goal[1])**2) <= GOAL_SEED_RADIUS**2) & (Z >= COLUMN_Z[0]) & (Z <= COLUMN_Z[1])
     if not (seed & ~blocked).any():
         raise ValueError("goal seed has no free cell (goal occupied, unknown or outside the volume)")
     phi = np.ma.MaskedArray(np.where(seed, -1., 1.), mask=blocked)

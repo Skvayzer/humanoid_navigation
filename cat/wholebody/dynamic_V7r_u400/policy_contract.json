@@ -1,5 +1,5 @@
 {
- "name": "stationary_hands_V7r_u400",
+ "name": "dynamic_V7r_u400",
  "checkpoint_sha256": "cfd252823fcab1b58acf32dfb8fe41097347d2a0a25d51e26e634de22a84dfb4",
  "obs_dim": 226,
  "action_dim": 29,

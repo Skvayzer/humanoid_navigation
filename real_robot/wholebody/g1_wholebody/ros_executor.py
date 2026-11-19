@@ -73,6 +73,9 @@ def parse(argv=None):
                    help='> 0: points this close to a palm are part of the robot too (an object held in the hand)')
     p.add_argument('--no-dynamic', action='store_true', help="with --static-map: obstacles = the map only, no lidar layer")
     p.add_argument('--static-map', help="static ESDF npz (esdf_layers) of the room: 'real' / 'both' = this map + the lidar's last 0.5 s")
+    p.add_argument('--no-mount-autocal', dest='mount_autocal', action='store_false',
+                   help='keep the LiDAR mount fixed at the URDF (default: calibrate its roll/pitch online while standing '
+                        'still, and warn when the head is off by more than 3 deg)')
     p.add_argument('--max-tilt-deg', type=float, default=25.,
                    help='pelvis tilt (IMU) that DAMPs the robot in STAND/POLICY (fall watchdog; the rope holds a falling '
                         'robot up, so the old 45 never fired)')
@@ -526,6 +529,9 @@ def main(argv=None):
                     upper_rate=args.upper_rate)
     ex = rn.Executor(contract, kin, infer, FieldPlanner(scene), worker, cfg)
     cfg.limits.max_tilt_deg = args.max_tilt_deg
+    from .frames import MountCalibrator
+    mount_cal = MountCalibrator(ex.chain) if args.mount_autocal else None
+    mount_warned = None
     if args.pitch_bias_deg:
         from wholebody_core import pitch_bias
         ex.builder.gravity_bias = pitch_bias(args.pitch_bias_deg)
@@ -636,6 +642,17 @@ def main(argv=None):
                 slam_log = np.r_[pose[0][:3, 3], matrix_quat(pose[0][:3, :3])]; slam_stamp = pose[1]
             for c in cmds:
                 ok = ex.command(c); log.info('operator %s -> %s (%s)' % (c, 'ok' if ok else 'refused', ex.reason))
+            if mount_cal is not None and n % 5 == 2 and ex.state is not None and ex.pose is not None:
+                st = ex.state                                   # standing still: the mount calibration's samples
+                still = (ex.mode == rn.STAND or (ex.mode == rn.POLICY and ex.builder_ready and ex.builder.command[0] < .5)) \
+                    and np.abs(st.dq[:12]).max() < .1 and np.linalg.norm(st.gyro) < .1 and now - ex.pose['received'] < .2
+                if still:
+                    mount_cal.add(ex.pose['t'], st.q, st.quat_wxyz)
+            if mount_cal is not None and n % 50 == 27 and mount_cal.update():
+                warn = mount_cal.warning()
+                if (warn is None) != (mount_warned is None):
+                    (log.warning if warn else log.info)(warn or 'head/LiDAR mount back within 3 deg of the URDF')
+                mount_warned = warn
             if n % 5 == 0 and ex.state is not None and ex.pose is not None:     # the self-filter's pose history
                 pelvis = ex._pelvis(ex.state)
                 if pelvis is not None:
@@ -673,7 +690,9 @@ def main(argv=None):
                               field_hold=ex.field_hold, latch=int(ex.builder.stop) if ex.builder_ready else None,
                               obstacles=worker.mode, scene=world['scene'].name,
                               goal_xy=None if ex.planner.operator_goal is None else np.round(ex.planner.operator_goal, 2).tolist(),
-                              speed=ex.cfg.speed, speed_range=(contract.get('command') or {}).get('trained_speed_m_s'))
+                              speed=ex.cfg.speed, speed_range=(contract.get('command') or {}).get('trained_speed_m_s'),
+                              mount_correction_deg=None if mount_cal is None else np.round(np.degrees(ex.chain.correction), 1).tolist(),
+                              head_warning=mount_warned)
                 bridge.status.publish(bridge.String(data=json.dumps(status)))
                 if ex.state is not None and ex.pose is not None:
                     pos, quat, _ = ex._pelvis(ex.state)

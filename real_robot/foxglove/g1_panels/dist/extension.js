@@ -136,7 +136,9 @@ function initControls(context) {
   };
 
   const status = el("div", { fontVariantNumeric: "tabular-nums", minHeight: "16px" }, "no status yet");
-  root.append(status);
+  const headWarn = el("div", { display: "none", padding: "3px 6px", borderRadius: "4px", background: "#d08000", color: "#ffffff",
+    fontWeight: "600" });                               // the executor's head/LiDAR mount watchdog
+  root.append(status, headWarn);
 
   // operator + obstacles on the left, one big DAMP on the right
   const top = el("div", { display: "flex", gap: "8px", alignItems: "stretch" });
@@ -247,6 +249,8 @@ function initControls(context) {
         status.textContent = "mode " + s.mode + "  ·  " + latch +
           "  ·  speed " + (s.speed == null ? "field (fixed)" : Number(s.speed).toFixed(2) + " m/s" + (range ? " (trained " + range + ")" : "")) +
           (s.reason ? "  ·  " + s.reason : "");
+        headWarn.textContent = s.head_warning ? "⚠ " + s.head_warning : "";
+        headWarn.style.display = s.head_warning ? "block" : "none";
         speed.disabled = s.speed == null;
         if (s.speed != null && Date.now() - speedTouched > 1500) {       // follow the executor unless the operator is dragging
           speed.value = String(s.speed); speedValue.textContent = Number(s.speed).toFixed(2) + " m/s";

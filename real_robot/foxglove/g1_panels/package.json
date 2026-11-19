@@ -3,7 +3,7 @@
   "displayName": "g1-wholebody-panels",
   "description": "ESDF height slider (live, wheel and arrow keys) and one compact G1 control panel (operator, obstacles, scenes, operator speed)",
   "publisher": "rrl",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "license": "UNLICENSED",
   "main": "./dist/extension.js",
   "keywords": ["g1", "wholebody"]

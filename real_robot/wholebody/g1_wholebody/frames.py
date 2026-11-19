@@ -91,12 +91,20 @@ class PelvisChain:
 
     def __init__(self, kinematics, mount='unitree_urdf', lidar_to_imu_t=LIDAR_TO_IMU_T):
         spec = MOUNTS[mount] if isinstance(mount, str) else mount
-        t_torso_lidar = transform(rpy_matrix(*spec['rpy']), spec['xyz'])
-        t_lidar_body = transform(np.eye(3), -np.asarray(lidar_to_imu_t, float))   # IMU origin in the lidar frame
-        self.t_torso_body = t_torso_lidar @ t_lidar_body
-        self.t_body_torso = inverse(self.t_torso_body)
+        self.t_torso_lidar0 = transform(rpy_matrix(*spec['rpy']), spec['xyz'])
+        self.t_lidar_body = transform(np.eye(3), -np.asarray(lidar_to_imu_t, float))   # IMU origin in the lidar frame
         self.kin = kinematics
         self.mount = mount
+        self.set_mount_correction(0., 0.)
+
+    def set_mount_correction(self, roll, pitch):
+        """Rotate the LiDAR mount about the torso axes by (roll, pitch) rad: the head (no joint, no encoder) is not
+        always where the URDF puts it (2026-11-19: 12 deg pitched forward, then back). Position stays the mount's."""
+        self.correction = (float(roll), float(pitch))
+        r = rpy_matrix(roll, pitch, 0.)
+        t = self.t_torso_lidar0.copy(); t[:3, :3] = r @ t[:3, :3]
+        self.t_torso_body = t @ self.t_lidar_body
+        self.t_body_torso = inverse(self.t_torso_body)
 
     def pelvis_torso(self, q):
         bodies, _, _ = self.kin.frames(q)
@@ -117,3 +125,50 @@ class PelvisChain:
         if imu_quat_wxyz is not None:
             rotation = fuse_orientation(rotation, quat_matrix(imu_quat_wxyz))
         return t[:3, 3].copy(), matrix_quat(rotation), rotation
+
+
+def tilt_rp(rotation):
+    """(roll, pitch) rad of a rotation: the tilt part, heading-free."""
+    r = np.asarray(rotation)
+    return np.arctan2(r[2, 1], r[2, 2]), np.arcsin(-np.clip(r[2, 0], -1., 1.))
+
+
+class MountCalibrator:
+    """Online LiDAR-mount calibration and head watchdog. While the robot stands still, the torso tilt from SLAM
+    (T_map_body through the mount) and from the pelvis IMU + waist FK must agree; the median difference over the last
+    second moves the chain's mount correction half-way there (heading is not observable from the IMU: untouched).
+    The floor of the SLAM map is level (checked 2026-11-19), so the difference is the head, not SLAM."""
+
+    def __init__(self, chain, gain=.5, min_samples=8, max_deg=20., warn_deg=3.):
+        self.chain, self.gain, self.min_samples = chain, gain, min_samples
+        self.max, self.warn = np.radians(max_deg), np.radians(warn_deg)
+        self.samples = []
+
+    def residual(self, t_map_body, q, imu_quat_wxyz):
+        """(roll, pitch) rad: torso tilt from SLAM minus from the IMU, with the current correction."""
+        r_slam = (np.asarray(t_map_body) @ self.chain.t_body_torso)[:3, :3]
+        r_imu = quat_matrix(imu_quat_wxyz) @ self.chain.pelvis_torso(q)[:3, :3]
+        a, b = tilt_rp(r_slam), tilt_rp(r_imu)
+        return a[0] - b[0], a[1] - b[1]
+
+    def add(self, t_map_body, q, imu_quat_wxyz):
+        self.samples.append(self.residual(t_map_body, q, imu_quat_wxyz))
+
+    def update(self):
+        """Apply the last samples (call ~1 Hz). Returns True when the correction changed."""
+        if len(self.samples) < self.min_samples:
+            self.samples = []
+            return False
+        dr, dp = np.median(np.array(self.samples), axis=0); self.samples = []
+        roll, pitch = self.chain.correction
+        roll = float(np.clip(roll + self.gain * dr, -self.max, self.max))
+        pitch = float(np.clip(pitch + self.gain * dp, -self.max, self.max))
+        self.chain.set_mount_correction(roll, pitch)
+        return True
+
+    def warning(self):
+        """Text when the head is off the URDF mount by more than warn_deg, else None."""
+        roll, pitch = self.chain.correction
+        if max(abs(roll), abs(pitch)) <= self.warn:
+            return None
+        return 'head/LiDAR mount off the URDF: pitch %+.1f, roll %+.1f deg (check the head screws)' % (np.degrees(pitch), np.degrees(roll))

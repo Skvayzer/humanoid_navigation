@@ -258,6 +258,13 @@ def delay_body_pos(base_pos, base_quat, odom_pos, odom_quat, positions):
     return odom_pos+local @ quat_matrix(odom_quat).T
 
 
+def pitch_bias(degrees):
+    """Gravity-observation rotation that makes the robot look pitched BACK by `degrees` more than it is (body y axis), so
+    a policy holding its usual attitude leans that much further forward: g' = Ry(d) g (g in the pelvis frame)."""
+    d = np.radians(float(degrees)); c, s = np.cos(d), np.sin(d)
+    return np.array([[c, 0., s], [0., 1., 0.], [-s, 0., c]])
+
+
 class ObservationBuilder:
     """The 226-dim actor observation for field-driven (goal) mode, step by step as in training.
 
@@ -271,6 +278,9 @@ class ObservationBuilder:
         if speed is not None and not 0 < float(speed) <= 1.:
             raise ValueError("operator speed must be in (0, 1] m/s")
         self.speed = None if speed is None else float(speed)     # operator-speed rule (task._operator_command)
+        # Real-robot workaround (None in training): a fixed rotation applied to the observed gravity, e.g. an apparent
+        # pitch bias so that the policy holds its torso a few degrees further forward (pitch_bias below).
+        self.gravity_bias = None
         # Operator-speed rule only: the field no longer slows the robot down at its goal, so the caller stops it there
         # (arrived=True: zero command, the policy stands as for any zero command; False again: it walks on).
         self.arrived = False
@@ -357,6 +367,8 @@ class ObservationBuilder:
 
     def _observe(self, q, dq, gyro, base_pos, base_quat, fields, positions):
         gravity = -self.pelvis_rotation[2, :]
+        if self.gravity_bias is not None:
+            gravity = self.gravity_bias @ gravity
         gyro = np.zeros(3) if gyro is None else np.asarray(gyro, float)
         dq = np.zeros(29) if dq is None else np.asarray(dq, float)
         command = self.command.copy()

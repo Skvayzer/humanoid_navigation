@@ -76,6 +76,8 @@ def parse(argv=None):
     p.add_argument('--no-mount-autocal', dest='mount_autocal', action='store_false',
                    help='keep the LiDAR mount fixed at the URDF (default: calibrate its roll/pitch online while standing '
                         'still, and warn when the head is off by more than 3 deg)')
+    p.add_argument('--pose-latency', type=float, default=0.01,
+                   help='shortest delay between a SLAM pose and its arrival here, s (the rest is measured per message)')
     p.add_argument('--max-tilt-deg', type=float, default=25.,
                    help='pelvis tilt (IMU) that DAMPs the robot in STAND/POLICY (fall watchdog; the rope holds a falling '
                         'robot up, so the old 45 never fired)')
@@ -161,6 +163,22 @@ def policy_paths(name):
     return d / 'policy.onnx', d / 'policy_contract.json'
 
 
+class StampAge:
+    """How old a stamped message is on arrival when its stamps are on another clock. FAST_LIO_G1 stamps follow the vendor
+    board's clock (~20 min off the Jetson's), so "now - stamp" says nothing: clipped to 0.5 s it made the IMU carry the
+    heading over 0.5 s of turning that had already happened (heading errors of 6-8 deg rms, 30-45 deg peak on the robot,
+    2026-11-17..19). The smallest (arrival - stamp) of the last `window` messages is the clock offset plus the shortest
+    latency; age = (arrival - stamp) - that minimum + floor_s (the shortest latency itself, assumed). arrival: any
+    steady clock (monotonic)."""
+
+    def __init__(self, window=250, floor_s=0.01, max_s=0.5):
+        self.offsets = collections.deque(maxlen=window); self.floor, self.max = float(floor_s), float(max_s)
+
+    def __call__(self, arrival, stamp):
+        d = arrival - stamp; self.offsets.append(d)
+        return float(min(self.max, max(0., d - min(self.offsets) + self.floor)))
+
+
 class Bridge:
     """rclpy side: latest-message slots filled by callbacks, read by the control thread."""
 
@@ -181,6 +199,7 @@ class Bridge:
         self.lock = threading.Lock()
         self.pose = None; self.commands = []; self.world = []
         self.t_map_odom = None; self.obstacles_raw = None
+        self.pose_age = StampAge(floor_s=getattr(args, 'pose_latency', 0.01))
         self.args = args
         # /lowstate (500 Hz on the robot) is NOT spun: one rclpy callback costs ~0.3 ms of Python overhead (Jetson ~1 ms),
         # i.e. half a core for data used at 50 Hz. It lives on a node the executor never sees; the control loop takes
@@ -231,11 +250,15 @@ class Bridge:
     def spin_until(self, deadline):
         """Process callbacks until `deadline` (time.monotonic). Waiting releases the GIL (checked on Foxy), so one
         blocking wait per callback is enough: no polling slices."""
+        first = True
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                if first:                                # behind schedule: still take a few callbacks per tick, or the
+                    for _ in range(4):                   # SLAM pose and the viewer's commands (DAMP!) never arrive
+                        self.executor.spin_once(timeout_sec=0)
                 return
-            self.executor.spin_once(timeout_sec=remaining)
+            self.executor.spin_once(timeout_sec=remaining); first = False
 
     def take_lowstate(self):
         """Newest raw LowState since the last call (or None), with its take time."""
@@ -261,9 +284,10 @@ class Bridge:
         p, o = msg.pose.pose.position, msg.pose.pose.orientation
         t_odom_body = transform(quat_matrix([o.w, o.x, o.y, o.z]), [p.x, p.y, p.z])
         stamp = msg.header.stamp.sec + 1e-9 * msg.header.stamp.nanosec
-        age = max(0., min(0.5, self.node.get_clock().now().nanoseconds * 1e-9 - stamp))
+        received = time.monotonic()
+        age = self.pose_age(received, stamp)            # not "now - stamp": the stamps are on the vendor board's clock
         with self.lock:
-            self.pose = (t_map_odom @ t_odom_body, stamp, time.monotonic(), age); self.t_map_odom = t_map_odom
+            self.pose = (t_map_odom @ t_odom_body, stamp, received, age); self.t_map_odom = t_map_odom
 
     def _world(self, kind, value):
         with self.lock:
@@ -394,10 +418,12 @@ class Bridge:
 
     def publish_cube(self, fields):
         """The policy's whole sdf window for the viewer's slider: handed to a background thread (quantising and zlib take
-        ~20 ms on the Jetson; zlib releases the GIL), so the 50 Hz loop only stores a reference. A newer window replaces
-        one not yet sent."""
+        ~20 ms on the Jetson; zlib releases the GIL). The sdf is copied here (~1 ms): the control loop may give the
+        grid's shared-memory slot back to the solvers before the thread is done. A newer window replaces one not yet
+        sent."""
+        job = (np.array(fields.sdf, np.float32), [float(v) for v in fields.origin], float(fields.dx))
         with self._cube_cv:
-            self._cube_next = fields; self._cube_cv.notify()
+            self._cube_next = job; self._cube_cv.notify()
         if self._cube_thread is None:
             self._cube_thread = threading.Thread(target=self._cube_loop, name='esdf_cube', daemon=True); self._cube_thread.start()
 
@@ -406,24 +432,24 @@ class Bridge:
             with self._cube_cv:
                 while self._cube_next is None:
                     self._cube_cv.wait()
-                fields, self._cube_next = self._cube_next, None
+                job, self._cube_next = self._cube_next, None
             try:
-                self.cube_pub.publish(self.cube_msg(fields))
+                self.cube_pub.publish(self.cube_msg(*job))
             except Exception as exc:  # the viewer's cube must never take the executor down
                 self.node.get_logger().warn('esdf cube: %r' % exc)
 
-    def cube_msg(self, fields):
+    def cube_msg(self, sdf, origin, dx):
         """sensor_msgs/Image, encoding CUBE_ENCODING: the sdf as uint8 (CUBE_LO..CUBE_HI m in 255 steps), layer after layer
         (height = nz * nx rows of width ny); each row as its byte differences (uint8, wrapping), the whole zlib level 1
         (~3.4x smaller than raw: half the window is the 'far' plateau). frame_id = 'esdf <origin x y z> <dx> <nz> <lo>
         <hi>'. The viewer script (foxglove/esdf_slice.ts) inflates it and cuts the slider's layer."""
-        sdf = fields.sdf; nx, ny, nz = sdf.shape
+        nx, ny, nz = sdf.shape
         q = np.empty((nz, nx, ny), np.uint8)
         np.clip((np.moveaxis(sdf, 2, 0) - self.CUBE_LO) * (255. / (self.CUBE_HI - self.CUBE_LO)) + .5, 0, 255, out=q, casting='unsafe')
         d = np.empty_like(q); d[..., 0] = q[..., 0]; np.subtract(q[..., 1:], q[..., :-1], out=d[..., 1:])
         z = zlib.compress(d.tobytes(), 1)
         m = self.Image(); m.header.stamp = self.node.get_clock().now().to_msg()
-        m.header.frame_id = 'esdf %.4f %.4f %.4f %.4f %d %.3f %.3f' % (*fields.origin, fields.dx, nz, self.CUBE_LO, self.CUBE_HI)
+        m.header.frame_id = 'esdf %.4f %.4f %.4f %.4f %d %.3f %.3f' % (*origin, dx, nz, self.CUBE_LO, self.CUBE_HI)
         m.height, m.width, m.encoding, m.is_bigendian, m.step = nz * nx, ny, self.CUBE_ENCODING, 0, ny
         m.data = array.array('B', z)
         return m
@@ -497,16 +523,30 @@ def main(argv=None):
              'ACTIVE: motor output allowed' if args.active else 'PASSIVE: /lowcmd publisher not created'))
 
     # ---------------------------------------------------------------- anchor the scene
+    from .frames import MountCalibrator
     chain = PelvisChain(kin, args.mount)
     if args.anchor_at_robot:
         log.info('waiting for LowState + SLAM pose to anchor the scene at the robot ...')
+        seen = []
         while rclpy.ok():
             bridge.spin_until(time.monotonic() + 0.05)
             low, pose, _ = bridge.take()
             if low is not None and pose is not None:
-                state = decode_lowstate(low[0])
-                pos, quat, rot = chain.pelvis_pose(pose[0], state.q, state.quat_wxyz)
-                anchor = (float(pos[0]), float(pos[1]), heading(rot)); break
+                state = decode_lowstate(low[0]); seen.append((pose[0], state))
+                if len(seen) >= (20 if args.mount_autocal else 1):       # ~1 s of samples for the mount
+                    break
+        if args.mount_autocal:
+            # the head is not always where the URDF puts it (12 deg = the pelvis 10 cm off): find the mount from the
+            # still samples first, or the scene is anchored at a wrong place and "moves" when the online calibration settles
+            still = [(t, st.q, st.quat_wxyz) for t, st in seen if np.abs(st.dq[:12]).max() < .1 and np.linalg.norm(st.gyro) < .1]
+            if MountCalibrator(chain).solve(still):
+                log.info('LiDAR mount at start: pitch %+.1f, roll %+.1f deg from the URDF (%d still samples)'
+                         % (np.degrees(chain.correction[1]), np.degrees(chain.correction[0]), len(still)))
+            else:
+                log.info('LiDAR mount at start: not calibrated (the robot was moving); the online calibration follows')
+        pose0, state = seen[-1]
+        pos, quat, rot = chain.pelvis_pose(pose0, state.q, state.quat_wxyz)
+        anchor = (float(pos[0]), float(pos[1]), heading(rot))
     else:
         anchor = tuple(args.anchor)
     scene = VirtualScene(args.scene, anchor=anchor)
@@ -529,9 +569,11 @@ def main(argv=None):
                     upper_rate=args.upper_rate)
     ex = rn.Executor(contract, kin, infer, FieldPlanner(scene), worker, cfg)
     cfg.limits.max_tilt_deg = args.max_tilt_deg
-    from .frames import MountCalibrator
+    ex.chain.set_mount_correction(*chain.correction)        # one mount for the anchor above and everything after
     mount_cal = MountCalibrator(ex.chain) if args.mount_autocal else None
-    mount_warned = None
+    mount_warned = mount_cal.warning() if mount_cal is not None else None
+    if mount_warned:
+        log.warning(mount_warned)
     if args.pitch_bias_deg:
         from wholebody_core import pitch_bias
         ex.builder.gravity_bias = pitch_bias(args.pitch_bias_deg)
@@ -603,7 +645,11 @@ def main(argv=None):
                     ok = False; ex.reason = 'refused scene %s: %s' % (value, exc)
                 else:
                     worker.set_world(scene=new); ok = ex.replace_world(FieldPlanner(new))
-                    world['scene'] = new; ex.reason = 'scene %s at the robot' % new.name
+                    world['scene'] = new; ex.reason = 'scene %s at the robot' % new.key
+                    try:
+                        ex._check_route()
+                    except rn.Fault as exc:
+                        ex.reason += ' (%s: go will be refused)' % exc
         else:
             ok = False
         log.info('%s %s -> %s (%s)' % (kind, value if kind != 'goal' else np.round(value, 2), 'ok' if ok else 'refused', ex.reason))
@@ -617,6 +663,15 @@ def main(argv=None):
         ex.command('shadow')
 
     recorder = Recorder(args.log_dir) if args.log_dir else None
+    soft_errors = collections.Counter()
+
+    def soft(what, exc):
+        """A failure of something the control loop can live without (viewer output, a viewer command, the mount
+        calibration): logged (1st, 10th, 100th, then every 1000th), never raised -- an exception out of the loop means
+        0.5 s of DAMP and a robot on the floor."""
+        soft_errors[what] += 1; k = soft_errors[what]
+        if k in (1, 10, 100) or k % 1000 == 0:
+            log.error('%s failed (%d times): %r' % (what, k, exc))
     last_slice = last_cube = None
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set()); signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -642,25 +697,32 @@ def main(argv=None):
                 slam_log = np.r_[pose[0][:3, 3], matrix_quat(pose[0][:3, :3])]; slam_stamp = pose[1]
             for c in cmds:
                 ok = ex.command(c); log.info('operator %s -> %s (%s)' % (c, 'ok' if ok else 'refused', ex.reason))
-            if mount_cal is not None and n % 5 == 2 and ex.state is not None and ex.pose is not None:
-                st = ex.state                                   # standing still: the mount calibration's samples
-                still = (ex.mode == rn.STAND or (ex.mode == rn.POLICY and ex.builder_ready and ex.builder.command[0] < .5)) \
-                    and np.abs(st.dq[:12]).max() < .1 and np.linalg.norm(st.gyro) < .1 and now - ex.pose['received'] < .2
-                if still:
-                    mount_cal.add(ex.pose['t'], st.q, st.quat_wxyz)
-            if mount_cal is not None and n % 50 == 27 and mount_cal.update():
-                warn = mount_cal.warning()
-                if (warn is None) != (mount_warned is None):
-                    (log.warning if warn else log.info)(warn or 'head/LiDAR mount back within 3 deg of the URDF')
-                mount_warned = warn
+            try:
+                if mount_cal is not None and n % 5 == 2 and ex.state is not None and ex.pose is not None:
+                    st = ex.state                                   # not moving (hanging in IDLE counts): the mount's samples
+                    walking = ex.mode == rn.POLICY and not (ex.builder_ready and ex.builder.command[0] < .5)
+                    if not walking and np.abs(st.dq[:12]).max() < .1 and np.linalg.norm(st.gyro) < .1 and now - ex.pose['received'] < .2:
+                        mount_cal.add(ex.pose['t'], st.q, st.quat_wxyz)
+                if mount_cal is not None and n % 50 == 27 and mount_cal.update():
+                    warn = mount_cal.warning()
+                    if warn is not None and mount_warned is None:
+                        log.warning(warn)               # Foxy: one call site must keep one severity (two sites, not a choice)
+                    elif warn is None and mount_warned is not None:
+                        log.info('head/LiDAR mount back within 3 deg of the URDF')
+                    mount_warned = warn
+            except Exception as exc:
+                soft('mount calibration', exc)
             if n % 5 == 0 and ex.state is not None and ex.pose is not None:     # the self-filter's pose history
                 pelvis = ex._pelvis(ex.state)
                 if pelvis is not None:
                     history.append((time.time(), np.array(ex.state.q, float), pelvis[0].copy(), np.asarray(pelvis[1], float)))
             for kind, value in bridge.take_world():
-                apply_world(kind, value)
+                try:
+                    apply_world(kind, value)
+                except Exception as exc:
+                    ex.reason = 'refused %s: internal error' % kind; soft('viewer command %s' % kind, exc)
             cmd = ex.step(now)
-            if cmd is not None:
+            if cmd is not None and bridge.lowcmd is not None:
                 bridge.publish_lowcmd(cmd)
             if ex.mode != last_mode:
                 text = '%s -> %s: %s' % (last_mode, ex.mode, ex.reason)
@@ -676,45 +738,49 @@ def main(argv=None):
                              quat=ex.state.quat_wxyz, action=L.get('action', zeros29), targets=L.get('targets', zeros29),
                              command=L.get('command', zeros4), pelvis_xy=L.get('pelvis_xy', zeros2),
                              slam=slam_log, slam_stamp=slam_stamp)
-            if n % 10 == 0:
-                status = dict(mode=ex.mode, reason=ex.reason, step_ms=round(1e3 * L.get('step_s', 0.), 2),
-                              latency_ms=round(1e3 * (L.get('latency_s') or 0.), 1), overruns=overruns,
-                              pelvis_xy=np.round(L.get('pelvis_xy', [np.nan, np.nan]), 3).tolist(),
-                              waypoint=ex.planner.active, reached=ex.planner.reached, hold=ex.planner.hold_xy is not None,
-                              fields_age_s=None if ex.fields_time is None else round(now - ex.fields_time, 1),
-                              field_solve_s=None if worker.last_compute_s is None else round(worker.last_compute_s, 2),
-                              field_refresh_s=None if worker.last_refresh_s is None else round(worker.last_refresh_s, 3),
-                              field_refreshes=worker.refreshes,
-                              field_error=worker.last_error, policy_wait=L.get('policy_wait'), active_allowed=args.active,
-                              field_goal=None if ex.field_goal is None else np.round(np.asarray(ex.field_goal)[:2], 2).tolist(),
-                              field_hold=ex.field_hold, latch=int(ex.builder.stop) if ex.builder_ready else None,
-                              obstacles=worker.mode, scene=world['scene'].name,
-                              goal_xy=None if ex.planner.operator_goal is None else np.round(ex.planner.operator_goal, 2).tolist(),
-                              speed=ex.cfg.speed, speed_range=(contract.get('command') or {}).get('trained_speed_m_s'),
-                              mount_correction_deg=None if mount_cal is None else np.round(np.degrees(ex.chain.correction), 1).tolist(),
-                              head_warning=mount_warned)
-                bridge.status.publish(bridge.String(data=json.dumps(status)))
-                if ex.state is not None and ex.pose is not None:
-                    pos, quat, _ = ex._pelvis(ex.state)
-                    bridge.pelvis_pub.publish(bridge.pose_msg(args.map_frame, pos, quat))
-                    bridge.publish_pelvis_tf(args.map_frame, pos, quat)
-                    if ex.fields is not None:
-                        sites = kin.world_sites(ex.state.q, pos, quat)
-                        sdf = ex.fields.sample(sites)[2].copy(); sdf[5:7] -= hand_radii    # as the policy sees the hands
-                        bridge.publish_sites(sites, sdf)
-                    g = ex.planner.goal
-                    bridge.goal_pub.publish(bridge.pose_msg(args.map_frame, [g[0], g[1], GOAL_Z], [1, 0, 0, 0]))
-            if n % 100 == 50 and bridge.scene_msg is not None:
-                bridge.scene_pub.publish(bridge.scene_msg)
-            # viewer-only outputs: built (numpy + a copy of up to 0.6 MB, in the control thread) only when someone listens
-            if n % 50 == 25 and ex.fields is not None and ex.fields is not last_slice and bridge.slice_pub.get_subscription_count():
-                last_slice = ex.fields
-                bridge.publish_slice(ex.fields)
-            if n % 25 == 7 and bridge.band_pub.get_subscription_count():                  # 2 Hz: the lidar the fields use
-                bridge.publish_band(history[-1][2] if history else None, args.rope_radius)
-            if n % 25 == 12 and ex.fields is not None and ex.fields is not last_cube and bridge.cube_pub.get_subscription_count():
-                last_cube = ex.fields
-                bridge.publish_cube(ex.fields)
+            try:                                    # viewer outputs
+                if n % 10 == 0:
+                    status = dict(mode=ex.mode, reason=ex.reason, step_ms=round(1e3 * L.get('step_s', 0.), 2),
+                                  latency_ms=round(1e3 * (L.get('latency_s') or 0.), 1), overruns=overruns,
+                                  pelvis_xy=np.round(L.get('pelvis_xy', [np.nan, np.nan]), 3).tolist(),
+                                  waypoint=ex.planner.active, reached=ex.planner.reached, hold=ex.planner.hold_xy is not None,
+                                  fields_age_s=None if ex.fields_time is None else round(now - ex.fields_time, 1),
+                                  field_solve_s=None if worker.last_compute_s is None else round(worker.last_compute_s, 2),
+                                  field_refresh_s=None if worker.last_refresh_s is None else round(worker.last_refresh_s, 3),
+                                  field_refreshes=worker.refreshes,
+                                  field_error=worker.last_error, policy_wait=L.get('policy_wait'), active_allowed=args.active,
+                                  field_goal=None if ex.field_goal is None else np.round(np.asarray(ex.field_goal)[:2], 2).tolist(),
+                                  field_hold=ex.field_hold, latch=int(ex.builder.stop) if ex.builder_ready else None,
+                                  obstacles=worker.mode, scene=world['scene'].key, scene_id=world['scene'].name,
+                                  pose_age_ms=None if ex.pose is None else round(1e3 * (ex.pose['received'] - ex.pose['taken']), 1),
+                                  goal_xy=None if ex.planner.operator_goal is None else np.round(ex.planner.operator_goal, 2).tolist(),
+                                  speed=ex.cfg.speed, speed_range=(contract.get('command') or {}).get('trained_speed_m_s'),
+                                  mount_correction_deg=None if mount_cal is None else np.round(np.degrees(ex.chain.correction), 1).tolist(),
+                                  head_warning=mount_warned)
+                    bridge.status.publish(bridge.String(data=json.dumps(status)))
+                    if ex.state is not None and ex.pose is not None:
+                        pos, quat, _ = ex._pelvis(ex.state)
+                        bridge.pelvis_pub.publish(bridge.pose_msg(args.map_frame, pos, quat))
+                        bridge.publish_pelvis_tf(args.map_frame, pos, quat)
+                        if ex.fields is not None:
+                            sites = kin.world_sites(ex.state.q, pos, quat)
+                            sdf = ex.fields.sample(sites)[2].copy(); sdf[5:7] -= hand_radii    # as the policy sees the hands
+                            bridge.publish_sites(sites, sdf)
+                        g = ex.planner.goal
+                        bridge.goal_pub.publish(bridge.pose_msg(args.map_frame, [g[0], g[1], GOAL_Z], [1, 0, 0, 0]))
+                if n % 100 == 50 and bridge.scene_msg is not None:
+                    bridge.scene_pub.publish(bridge.scene_msg)
+                # viewer-only outputs: built (numpy + a copy of up to 0.6 MB, in the control thread) only when someone listens
+                if n % 50 == 25 and ex.fields is not None and ex.fields is not last_slice and bridge.slice_pub.get_subscription_count():
+                    last_slice = ex.fields
+                    bridge.publish_slice(ex.fields)
+                if n % 25 == 7 and bridge.band_pub.get_subscription_count():                  # 2 Hz: the lidar the fields use
+                    bridge.publish_band(history[-1][2] if history else None, args.rope_radius)
+                if n % 25 == 12 and ex.fields is not None and ex.fields is not last_cube and bridge.cube_pub.get_subscription_count():
+                    last_cube = ex.fields
+                    bridge.publish_cube(ex.fields)
+            except Exception as exc:
+                soft('viewer output', exc)
     finally:
         if args.active and ex.mode in rn.ACTIVE and ex.state is not None:
             ex.command('damp')                       # never go quiet while the motors hold policy targets

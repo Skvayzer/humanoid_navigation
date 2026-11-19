@@ -58,6 +58,16 @@ class SelfFilterTest(unittest.TestCase):
         near = held[np.linalg.norm(held - palms[0], axis=1) < .14]
         self.assertTrue(self.surface.inside(near, h, grip_radius=.15).all())       # grip radius: part of the robot
 
+    def test_heading_across_180_degrees_is_interpolated_the_short_way(self):
+        from g1_wholebody.frames import matrix_quat, yaw_matrix
+        quat = lambda deg: matrix_quat(yaw_matrix(np.radians(deg)))         # w >= 0: 179 and -179 deg differ in sign
+        h = dict(t=np.array([100., 100.1]), q=np.array([self.nominal, self.nominal]), pos=np.tile([0., 0., .78], (2, 1)),
+                 quat=np.array([quat(179.), quat(-179.)]))
+        self.assertLess(h['quat'][0] @ h['quat'][1], 0)
+        own = self.surface_points(self.nominal, quat=quat(180.))            # the body half-way between the snapshots
+        timed = np.column_stack([own, np.full(len(own), 100.05)])
+        self.assertGreater(self.surface.inside(timed, h).mean(), .97)       # (the unaligned blend: heading 0, ~15 % missed)
+
     def test_remove_body_keeps_time_column_and_rope(self):
         h = self.history([self.nominal]); h['rope'] = np.array([0., 0., .78])
         pts = np.array([[0., 0., 1.6, 5.], [1., 1., .5, 6.]])                       # rope above the pelvis, a box

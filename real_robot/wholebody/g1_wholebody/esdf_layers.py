@@ -21,7 +21,8 @@ import numpy as np
 
 from wholebody_sim import DX, WINDOW
 
-REAL_Z = (0.25, 1.40)          # obstacle band: above the floor, below the window top (as sim's robot_perception)
+REAL_Z = (0.25, 1.40)          # real obstacles (lidar and static map): above the floor and low clutter, below the window
+                               # top. 0.25 since 2026-11-18; training's robot_perception keeps 0.10 (virtual scenes only)
 DYN_RADIUS_M = 0.52            # dynamic distance truncation (just above the policy's 0.5 m sdf clip)
 STATIC_MATCH_M = 0.08          # a lidar voxel this close to the base layer's surface is the base layer (localisation error)
 BODY_RADIUS_M = 0.12           # around each limb segment / field site
@@ -83,7 +84,8 @@ def build_static(points, extent, path_xy=None, clear_radius=0.35, z_range=REAL_Z
     idx = np.floor((p - (first - dx / 2)) / dx).astype(int)
     idx = idx[(idx >= 0).all(1) & (idx < np.array(shape)).all(1)]
     occ = np.zeros(shape, bool); occ[tuple(idx.T)] = True
-    return dict(sdf=fmm_sdf(occ, dx), first=first, dx=np.float64(dx), occupied=np.int64(occ.sum()))
+    return dict(sdf=fmm_sdf(occ, dx), first=first, dx=np.float64(dx), occupied=np.int64(occ.sum()),
+                z_range=np.asarray(z_range, float))
 
 
 class StaticEsdf:
@@ -94,6 +96,12 @@ class StaticEsdf:
         self.sdf, self.first, self.dx = d['sdf'].astype(np.float32), d['first'].astype(float), float(d['dx'])
         if abs(self.dx - DX) > 1e-9 or self.sdf.shape[2] != WINDOW[2] or abs(self.first[2] - DX / 2) > 1e-6:
             raise ValueError('%s: not on the window lattice (dx %.3f, %d layers)' % (path, self.dx, self.sdf.shape[2]))
+        # the band it was built for must be the lidar layer's: a map from before the band changed would load silently
+        # with obstacles the lidar layer no longer sees (files without the entry: built with 0.10-1.40)
+        self.z_range = tuple(float(v) for v in d['z_range']) if 'z_range' in d.files else (0.10, 1.40)
+        if not np.allclose(self.z_range, REAL_Z, atol=1e-6):
+            raise ValueError('%s was built for the band %.2f-%.2f m, the lidar layer uses %.2f-%.2f m: rebuild it '
+                             '(g1.sh static-esdf <map>)' % (path, *self.z_range, *REAL_Z))
         self.path = str(path)
 
     def crop(self, first, shape):
@@ -201,7 +209,8 @@ class BodySurface:
         return out
 
     def _inside_at(self, xyz_all, times, history, grip_radius):
-        """Each point against the body interpolated at its time (None: the newest snapshot); times rounded to 10 ms."""
+        """Each point against the body interpolated at its time (None: the newest snapshot); times are grouped to
+        TIME_STEP_S (one posed body per group)."""
         t = np.asarray(history['t'], float); out = np.zeros(len(xyz_all), bool)
         if times is None or len(t) < 2:
             keys = np.full(len(xyz_all), t[-1])
@@ -213,7 +222,10 @@ class BodySurface:
             a = 0. if len(t) < 2 else float(np.clip((key - t[j - 1]) / max(t[j] - t[j - 1], 1e-9), 0., 1.))
             i0 = j - 1 if len(t) > 1 else 0
             mix = lambda v: (1 - a) * np.asarray(v[i0], float) + a * np.asarray(v[j], float)
-            quat = mix(history['quat']); quat /= np.linalg.norm(quat)
+            qa, qb = np.asarray(history['quat'][i0], float), np.asarray(history['quat'][j], float)
+            if qa @ qb < 0:                             # q and -q are one rotation (matrix_quat keeps w >= 0): unaligned,
+                qb = -qb                                # headings either side of +-180 deg blend to a pose half a turn off
+            quat = (1 - a) * qa + a * qb; quat /= np.linalg.norm(quat)
             frames, palms = self.posed(mix(history['q']), mix(history['pos']), quat)
             hit = np.zeros(len(idx), bool)
             centres = np.array([frames[n][:3, :3] @ c + frames[n][:3, 3] for n, _, c, _ in self.bodies])
@@ -373,7 +385,7 @@ def main():
         extent = (c[:, 0].min() - 7, c[:, 0].max() + 7, c[:, 1].min() - 7, c[:, 1].max() + 7)
     t = time.time()
     s = build_static(pts, extent, path_xy, a.clear_radius)
-    np.savez_compressed(a.out, sdf=s['sdf'], first=s['first'], dx=s['dx'])
+    np.savez_compressed(a.out, sdf=s['sdf'], first=s['first'], dx=s['dx'], z_range=s['z_range'])
     print('%s: %d map points, grid %s at %.0f cm over x %.1f..%.1f y %.1f..%.1f, %d occupied voxels, %.1f s'
           % (a.out, len(pts), s['sdf'].shape, DX * 100, *extent, s['occupied'], time.time() - t))
 

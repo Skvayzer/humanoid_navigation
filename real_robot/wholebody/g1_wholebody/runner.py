@@ -17,6 +17,7 @@ command they received, so the executor must keep sending damping instead of goin
 """
 import math
 import time
+import traceback
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -34,12 +35,14 @@ ACTIVE = (STAND_UP, STAND, POLICY, DAMP)
 @dataclass
 class Limits:
     lowstate_timeout_s: float = 0.05        # 25 LowState periods
-    pose_timeout_s: float = 0.35            # SLAM publishes at 10 Hz
+    pose_timeout_s: float = 0.35            # FAST_LIO_G1 odometry: 50 Hz (the first pipeline: 10 Hz)
     pose_jump_m: float = 0.15               # + pose_speed_mps * dt between consecutive SLAM updates
     pose_jump_deg: float = 10.0             # + pose_rate_dps * dt
     pose_speed_mps: float = 1.5
     pose_rate_dps: float = 300.0
     fields_timeout_s: float = 8.0           # virtual scenes are static; the Jetson needs ~2-3 s per solve
+    obstacle_timeout_s: float = 2.0         # real / both with the lidar layer: age of the cloud behind the sdf in use (a full
+                                            # solve or the ~10 Hz refresh); without it a dead relay meant 8 s of blind walking
     step_budget_s: float = 0.018            # observe + policy + command; the policy dies at a full 20 ms delay
     step_budget_violations: int = 5         # consecutive
     step_hard_limit_s: float = 0.040
@@ -103,7 +106,10 @@ class Executor:
         self.reason = 'start'
         self.state = None; self.pose = None; self.prev_pose = None
         self.fields = None; self.fields_time = None; self.field_goal = None; self.field_hold = False; self.next_field_request = 0.
-        self.inflight = None                # what the pending field request is for: ('current'|'next'|'hold', waypoint)
+        self.inflight = None                # what the pending field request is for: ('current'|'next'|'hold', waypoint, route)
+        self.route_gen = 0                  # bumped with every new route: answers asked for an older one are dropped
+        self.obstacles_time = None          # when the sdf in use last took in a lidar cloud (real obstacles)
+        self.obstacles_grace_until = 0.     # after a world change: its first solve may take seconds
         self.prefetched = None              # (fields, goal, waypoint index) solved ahead of the waypoint switch
         self.mode_since = clock(); self.policy_started = None; self.builder_ready = False
         self.stand_from = None
@@ -190,17 +196,18 @@ class Executor:
             return self._enter(POLICY, 'operator balance')
         if name == 'go':
             if self.mode == STAND:
-                self._check_policy_preconditions(now)
+                self._check_policy_preconditions(now); self._check_route()
                 self.builder_ready = False; self.planner.hold_xy = None
                 return self._enter(POLICY, 'operator')
             if self.mode == POLICY and self.planner.hold_xy is not None:
+                self._check_route()
                 self.planner.hold_xy = None; self._request_fields(now, force=True)
                 self._resume()
                 return True
         if name == 'joy' and self.mode == POLICY and self.last.get('pelvis_xy') is not None:
             xy = np.asarray(self.last['pelvis_xy'])
-            self._set_joy(True); self.planner.hold_xy = None; self.planner.set_route(xy, xy)   # stand here until the stick moves
-            self.prefetched = None; self.next_field_request = 0.
+            self._set_joy(True); self.planner.hold_xy = None; self._set_route(xy, xy)   # stand here until the stick moves
+            self.next_field_request = 0.
             self.reason = 'joystick'; return True
         if name in ('stop', 'go', 'damp'):
             self._set_joy(False)
@@ -220,7 +227,7 @@ class Executor:
         fence = self.cfg.geofence
         if fence is not None and not (fence[0] + m <= g[0] <= fence[1] - m and fence[2] + m <= g[1] <= fence[3] - m):
             self.reason = 'refused goal (%.2f, %.2f): not %.1f m inside the geofence' % (g[0], g[1], m); return False
-        self.planner.set_route(xy, g); self.prefetched = None
+        self._set_route(xy, g)
         if self.mode == POLICY and self.planner.hold_xy is None:
             self._request_fields(now, force=True)
         self.reason = 'goal (%.2f, %.2f)' % (g[0], g[1])
@@ -234,10 +241,17 @@ class Executor:
             self.reason = 'refused: change the world while standing (stop first)'; return False
         planner.hold_xy = self.planner.hold_xy
         self.planner, self.prefetched, self.inflight = planner, None, None
+        self.route_gen += 1
+        self.obstacles_grace_until = now + self.cfg.limits.fields_timeout_s     # the new world's first answer is still to come
         self._request_fields(now, force=True)
         return True
 
     # ------------------------------------------------------------------ helpers
+    def _set_route(self, start, goal):
+        """A new route. Fields asked for the old one (in flight or prefetched) must never be used for it: its
+        waypoint indices mean other places."""
+        self.planner.set_route(start, goal); self.prefetched = None; self.route_gen += 1
+
     def _enter(self, mode, reason):
         if self.mode == DAMP and mode not in (DAMP, IDLE):
             return False                    # damping is latched
@@ -262,8 +276,29 @@ class Executor:
             raise Fault('POLICY needs a geofence of real free floor (config geofence)')
         if self.fields is None:
             raise Fault('no fields yet')
+        if self.fields_time is None or now - self.fields_time > self.cfg.limits.fields_timeout_s:
+            raise Fault('fields stale')           # refused here, not accepted and damped one step later
+        self._check_obstacles(now)
         if self.pose is None or now - self.pose['received'] > self.cfg.limits.pose_timeout_s:
             raise Fault('no fresh SLAM pose')
+
+    def _check_obstacles(self, now):
+        """Real obstacles through the lidar layer: the sdf in use must come from a recent cloud."""
+        fs = self.fields_source
+        if getattr(fs, 'mode', 'virtual') == 'virtual' or not getattr(fs, 'dynamic', False) or now < self.obstacles_grace_until:
+            return
+        if self.obstacles_time is None or now - self.obstacles_time > self.cfg.limits.obstacle_timeout_s:
+            raise Fault('real obstacles stale: no lidar update of the fields for %.1f s' %
+                        (float('inf') if self.obstacles_time is None else now - self.obstacles_time))
+
+    def _check_route(self):
+        """'go': the rest of the route must stay inside the geofence (a scene laid out at the robot may not)."""
+        f = self.cfg.geofence
+        if f is None:
+            return
+        for x, y in np.asarray(self.planner.waypoints, float).reshape(-1, 2)[self.planner.active:]:
+            if not (f[0] <= x <= f[1] and f[2] <= y <= f[3]):
+                raise Fault('route leaves the geofence at (%.2f, %.2f)' % (x, y))
 
     def _request_fields(self, now, force=False):
         """Periodic / forced refresh of the active goal's fields; prefetch of the next waypoint when close."""
@@ -284,13 +319,13 @@ class Executor:
                 kind, index, goal = 'next', nxt, p.waypoints[nxt]
         if force or kind == 'next' or now >= self.next_field_request:
             if self.fields_source.request(xy, goal):
-                self.inflight = (kind, index)
+                self.inflight = (kind, index, self.route_gen)
                 if kind != 'next':
                     self.next_field_request = now + p.period
 
     def _take_fields(self, now, fields, goal, hold=False):
         previous_goal = self.field_goal
-        self.fields, self.field_goal, self.field_hold = fields, goal, hold; self.fields_time = now
+        self.fields, self.field_goal, self.field_hold = fields, goal, hold; self.fields_time = self.obstacles_time = now
         moved = previous_goal is None or np.linalg.norm(np.asarray(goal)[:2] - np.asarray(previous_goal)[:2]) > .05
         # training's stop latch keeps a stopped robot standing; a new goal (fields that arrived after the robot had
         # started stopping on the old goal's fields, as with slow field solves) resumes it, unless the scene is done
@@ -302,15 +337,21 @@ class Executor:
         if new is None:
             return
         fields, goal = new
-        kind, index = self.inflight or ('current', self.planner.active); self.inflight = None
+        kind, index, gen = self.inflight or ('current', self.planner.active, self.route_gen); self.inflight = None
         p = self.planner
+        if gen != self.route_gen:                 # asked for a route replaced meanwhile (goal click, joystick, new world)
+            self.next_field_request = 0.          # dropped; ask for the present route at once
+            return
         if kind == 'next':
             if index == p.active + 1:
                 self.prefetched = (fields, goal, index)       # held until the switch
             elif index == p.active:
                 self._take_fields(now, fields, goal)          # the switch happened while it was being solved
         elif kind == 'hold' and p.hold_xy is not None:
-            self._take_fields(now, fields, goal, hold=True)
+            if np.linalg.norm(np.asarray(goal, float)[:2] - p.hold_xy) <= self.cfg.hold_goal_tolerance_m:
+                self._take_fields(now, fields, goal, hold=True)
+            else:                                 # the hold point moved while this was solved (stop -> go -> stop)
+                self.next_field_request = 0.
         elif kind == 'current' and index == p.active and p.hold_xy is None:
             self._take_fields(now, fields, goal)
         elif self.fields is None:
@@ -327,7 +368,7 @@ class Executor:
         if got is not None:
             src, grid = got
             if self.fields is src:
-                self.fields = grid
+                self.fields = grid; self.obstacles_time = now
             if self.prefetched is not None and self.prefetched[0] is src:
                 self.prefetched = (grid,) + tuple(self.prefetched[1:])
         fs.hold([self.fields, self.prefetched[0] if self.prefetched is not None else None])
@@ -368,10 +409,10 @@ class Executor:
         L = self.cfg.limits
         if now - s.received > L.lowstate_timeout_s:
             raise Fault('LowState stale %.0f ms' % (1e3 * (now - s.received)))
-        if not (np.isfinite(s.q).all() and np.isfinite(s.dq).all() and np.isfinite(s.gyro).all()):
+        if not _finite_state(s):
             raise Fault('non-finite LowState')
         tilt = np.degrees(np.arccos(np.clip(np.abs(_gravity_z(s.quat_wxyz)), -1, 1)))
-        if tilt > L.max_tilt_deg and self.mode in (STAND, POLICY):     # a robot hanging in the gantry may swing
+        if not tilt <= L.max_tilt_deg and self.mode in (STAND, POLICY):     # a robot hanging in the gantry may swing
             raise Fault('pelvis tilt %.0f deg' % tilt)
         lo, hi = self.c['soft_lower'] - L.joint_margin_rad, self.c['soft_upper'] + L.joint_margin_rad
         bad = np.flatnonzero((s.q < lo) | (s.q > hi))
@@ -392,6 +433,7 @@ class Executor:
                 self.last['checked_pose'] = self.pose
             if self.fields_time is None or now - self.fields_time > L.fields_timeout_s:
                 raise Fault('fields stale')
+            self._check_obstacles(now)
             if pelvis is not None:
                 x, y, z = pelvis[0]
                 xmin, xmax, ymin, ymax = self.cfg.geofence
@@ -428,21 +470,18 @@ class Executor:
                 if self.mode in ACTIVE and self.mode != DAMP:
                     raise Fault('no LowState')
                 return None
-            self._poll_fields(now)
-            self._refresh_fields(now)
-            remote = self._remote(now, s)
+            remote = self._remote(now, s)               # first: L2+B must act whatever fails below
             if remote is not None:
                 self.command(remote)
-            pelvis = self._pelvis(s)
-            if pelvis is not None:
-                self.last['pelvis_xy'] = pelvis[0][:2].copy()
-                if self.joy and self.mode == POLICY:
-                    self._joystick(s, pelvis)
-                if self.planner.update(pelvis[0]):
-                    self._advance(now)
-                self._request_fields(now)
-            if self.mode == DAMP:
+            if self.mode == DAMP:                       # latched damping never waits for perception, nor dies with it
+                try:
+                    self._perceive(now, s)              # still wanted: the status and a later 'stand' use the pose
+                except Exception:
+                    pass
                 return self._damp(s)
+            if self.mode in (STAND_UP, STAND, POLICY) and not _finite_state(s):
+                raise Fault('non-finite LowState')      # before the kinematics, which reject it with another error
+            pelvis = self._perceive(now, s)
             if self.mode in (STAND_UP, STAND, POLICY):
                 self._watchdogs(now, s, pelvis)
             if self.mode == STAND_UP:
@@ -457,12 +496,10 @@ class Executor:
                     cmd = None                          # computed, logged, never sent
             return cmd
         except Fault as exc:
-            if self.mode in ACTIVE:
-                self._enter(DAMP, str(exc))
-                return self._damp(s) if s is not None else None
-            if self.mode == SHADOW:
-                self.reason = 'shadow paused: %s' % exc; self.builder_ready = False
-            return None
+            return self._fault(s, str(exc))
+        except Exception as exc:                        # a bug or bad data: the motors must not keep their last targets
+            self.last['error'] = traceback.format_exc()
+            return self._fault(s, 'internal error: %r' % (exc,), internal=True)
         finally:
             elapsed = time.perf_counter() - t0
             self.last.update(mode=self.mode, reason=self.reason, step_s=elapsed,
@@ -473,8 +510,33 @@ class Executor:
                 if elapsed > L.step_hard_limit_s or self.budget_violations >= L.step_budget_violations:
                     self._enter(DAMP, 'control step overrun %.1f ms' % (1e3 * elapsed))
 
+    def _perceive(self, now, s):
+        """Fields in, pelvis pose, route progress, field requests. Returns the pelvis pose (or None without SLAM)."""
+        self._poll_fields(now)
+        self._refresh_fields(now)
+        pelvis = self._pelvis(s)
+        if pelvis is not None:
+            self.last['pelvis_xy'] = pelvis[0][:2].copy()
+            if self.joy and self.mode == POLICY:
+                self._joystick(s, pelvis)
+            if self.planner.update(pelvis[0]):
+                self._advance(now)
+            self._request_fields(now)
+        return pelvis
+
+    def _fault(self, s, text, internal=False):
+        if self.mode in ACTIVE:
+            self._enter(DAMP, text)
+            return self._damp(s) if s is not None else None
+        if self.mode == SHADOW:
+            self.reason = 'shadow paused: %s' % text; self.builder_ready = False
+        elif internal:
+            self.reason = text
+        return None
+
     def _damp(self, s):
-        return LowCmd.body(s.mode_machine, s.q, np.zeros(NUM_BODY), self.damp_kd, tau=np.zeros(NUM_BODY))
+        q = np.where(np.isfinite(s.q), s.q, 0.)        # kp = 0: the target does not act, but the command must be finite
+        return LowCmd.body(s.mode_machine, q, np.zeros(NUM_BODY), self.damp_kd, tau=np.zeros(NUM_BODY))
 
     def _stand(self, s, alpha):
         target = (1 - alpha) * self.stand_from + alpha * self.c['nominal'] if self.stand_from is not None else self.c['nominal']
@@ -551,7 +613,7 @@ class Executor:
             self.joy_heading = None
             want = goal if goal is not None and np.linalg.norm(goal - xy) < self.cfg.joy_update_m else xy
         if goal is None or np.linalg.norm(want - goal) > self.cfg.joy_update_m:
-            self.planner.set_route(xy, want); self.prefetched = None; self.next_field_request = 0.
+            self._set_route(xy, want); self.next_field_request = 0.
 
     def _filter_upper(self, raw):
         """Commanded waist/arm targets (12..28) from the policy's: the policy keeps seeing its own targets in the
@@ -585,6 +647,12 @@ class Executor:
         st['raw'] = [u, st['raw'][0], st['raw'][1]]; st['out'] = [y, st['out'][0]]
         out[12:] = y
         return out
+
+
+def _finite_state(s):
+    """Joint state and IMU usable: finite, and a quaternion that is one (a zero or NaN one gives a NaN tilt)."""
+    return bool(np.isfinite(s.q).all() and np.isfinite(s.dq).all() and np.isfinite(s.gyro).all()
+                and np.isfinite(s.quat_wxyz).all() and 0.5 < np.linalg.norm(s.quat_wxyz) < 1.5)
 
 
 def _gravity_z(quat_wxyz):

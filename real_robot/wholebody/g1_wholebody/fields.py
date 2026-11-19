@@ -88,6 +88,8 @@ class VirtualScene:
         self.goal = self.to_map(np.asarray(self.spec['goal'][:2], float))
         self.robot_perception = robot_perception
         self.name = self.spec.get('scene_id', 'scene')
+        # what it was asked for by (the file name the viewer's list uses); scene_id may differ (training-bank ids)
+        self.key = Path(scene).stem if isinstance(scene, (str, Path)) else self.name
 
     def to_map(self, xy):
         return self.rotation @ np.asarray(xy, float) + self.offset
@@ -304,10 +306,12 @@ class FieldWorker:
         self.in_use, self.flight, self.seq, self.delivered, self.turn = None, {}, 0, 0, 0
         self.last_compute_s, self.last_error = None, None
         self.mode, self.scene, self.world_seq = 'virtual', scene, 0
-        self.points_source = None       # real / both: callable -> (N, 3) map-frame points, or None when there are none fresh
-        self.body_source = None         # callable -> esdf_layers.body_capsules of the robot now (points inside: not obstacles)
+        self.points_source = None       # real / both: callable -> map-frame points (N, 3), or (N, 4) with each point's scan
+                                        # time (system clock), or None when there are none fresh
+        self.body_source = None         # callable -> the robot for the self-filter (esdf_layers.remove_body): capsules, or the
+                                        # pose-history dict (t, q, pos, quat, ...); None = no pose yet (no solve)
         self.held, self.refreshing, self.refreshed, self.next_refresh = set(), None, None, 0.
-        self.last_refresh_s, self.refreshes = None, 0
+        self.last_refresh_s, self.refreshes, self.refresh_started = None, 0, 0.
 
     @property
     def pending(self):
@@ -371,6 +375,9 @@ class FieldWorker:
 
     def refresh(self, grid, now):
         """Start re-making `grid` from the newest lidar (real / both), at most every REFRESH_PERIOD_S."""
+        if self.refreshing is not None and time.monotonic() - self.refresh_started > 2.:
+            # no answer: reported, not retried (its slot may still be written). The control side sees the obstacles go stale.
+            self.last_error = 'lidar refresh %s' % ('process died' if not self.processes[-1].is_alive() else 'not answering')
         if self.mode == 'virtual' or not self.dynamic or grid is None or getattr(grid, 'slot', None) is None or self.refreshing is not None \
                 or self.refreshed is not None or now < self.next_refresh:
             return False
@@ -381,6 +388,7 @@ class FieldWorker:
         if slot is None:
             return False
         self.seq += 1; self.refreshing = (self.seq, grid, slot); self.next_refresh = now + self.REFRESH_PERIOD_S
+        self.refresh_started = time.monotonic()
         self.queues[-1].put(('refresh', self.seq, grid.slot, slot, list(map(float, grid.origin)), list(map(float, grid.goal)),
                              grid.box, *inputs))
         return True

@@ -185,7 +185,7 @@ class WholeBodyTest(unittest.TestCase):
         except ImportError:
             onnxruntime = None
         for name in ('stationary_hands_S2far_u200', 'stationary_hands_S2far2_u330', 'stationary_hands_T2_u410', 'stationary_hands_E2_u300',
-                     'stationary_hands_V7_u100'):
+                     'stationary_hands_V7_u100', 'dynamic_V7r_u400'):
             with self.subTest(policy=name):
                 folder = wholebody/name
                 variant = json.loads((folder/'policy_contract.json').read_text())

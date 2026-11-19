@@ -168,7 +168,8 @@ class ExecutorTest(unittest.TestCase):
 
     def test_geofence(self):
         x, y = VirtualScene('sidegap_plain_047', anchor=(0., 0., 0.)).start
-        ex = self.make(geofence=(x - .2, x + .2, y - .2, y + .2)); self.to_policy(ex)
+        ex = self.make(); self.to_policy(ex)
+        ex.cfg.geofence = (x - .2, x + .2, y - .2, y + .2)      # ('go' itself refuses a route that leaves the fence)
         cmds = []
         for k in range(1, 30):    # walk the reported pose out slowly (no jump)
             cmds += self.run_steps(ex, 1, pelvis=np.r_[x + 0.02 * k, y, .78])
@@ -250,6 +251,76 @@ class ExecutorTest(unittest.TestCase):
         self.run_steps(ex, 30, buttons=('R1', 'X'))
         self.feed(ex, sticks=(0., 0.6, 0., 0.)); ex.step()                    # 0.6 deflection: 0.5 + 1.0 * 0.5 = 1.0 m
         np.testing.assert_allclose(np.linalg.norm(ex.planner.operator_goal - start), 1.0, atol=0.05)
+
+    # ------------------------------------------------------------------ review of 2026-11-19
+    def test_nan_joints_damp_and_the_damping_command_stays_finite(self):
+        ex = self.make(); self.to_policy(ex)
+        q = self.c['nominal'].copy(); q[3] = np.nan
+        cmds = self.run_steps(ex, 5, q=q, pose=False)           # (the test's own SLAM pose helper needs finite joints)
+        self.assert_damped(cmds[0], 'non-finite LowState', ex)
+        for cmd in cmds:                                        # every step, also while the kinematics keep failing
+            self.assertIsNotNone(cmd)
+            self.assertTrue(np.isfinite(cmd.q).all() and np.all(cmd.kp == 0) and np.all(cmd.kd[:29] > 0))
+
+    def test_broken_imu_quaternion_damps(self):
+        for bad in (np.full(4, np.nan), np.zeros(4)):
+            ex = self.make(); self.to_policy(ex)
+            self.clock.t += 0.02; self.feed(ex); ex.state.quat_wxyz = bad
+            self.assert_damped(ex.step(), 'non-finite LowState', ex)
+
+    def test_any_exception_in_a_step_damps(self):
+        ex = self.make(); self.to_policy(ex)
+        def broken():
+            raise RuntimeError('solver pipe closed')
+        self.fields.poll = broken
+        cmds = self.run_steps(ex, 3)
+        self.assert_damped(cmds[0], 'internal error', ex); self.assertIn('solver pipe closed', ex.last['error'])
+        self.assertTrue(all(c is not None and np.all(c.kp == 0) for c in cmds))     # latched, perception still broken
+
+    def test_answer_for_a_replaced_route_is_dropped(self):
+        ex = self.make(); self.to_policy(ex)
+        old_waypoint = np.asarray(ex.planner.waypoints[1], float)
+        # the prefetch of the scene route's waypoint 1 is in flight ...
+        self.fields.out = (ex.fields, old_waypoint); ex.inflight = ('next', 1, ex.route_gen)
+        self.assertTrue(ex.set_goal((0.5, 2.0)), ex.reason)                 # ... when the operator clicks a new goal
+        self.run_steps(ex, 1)
+        self.assertIsNone(ex.prefetched)                                    # (it was kept as the new route's waypoint 1)
+        self.run_steps(ex, 2)
+        np.testing.assert_allclose(ex.field_goal[:2], ex.planner.waypoints[0][:2], atol=1e-9)   # asked again at once
+        self.assertEqual(ex.mode, rn.POLICY, ex.reason)
+
+    def test_hold_answer_for_another_place_is_dropped(self):
+        ex = self.make(); self.to_policy(ex); self.assertTrue(ex.command('stop'))
+        far = np.asarray(ex.planner.hold_xy, float) + [1.5, 0.]             # a hold point from before the robot walked on
+        self.fields.out = (ex.fields, far); ex.inflight = ('hold', ex.planner.active, ex.route_gen)
+        self.run_steps(ex, 1)
+        self.assertGreater(np.linalg.norm(np.asarray(ex.field_goal)[:2] - far), 1.0)
+        self.run_steps(ex, 2)
+        np.testing.assert_allclose(ex.field_goal[:2], ex.planner.hold_xy, atol=1e-9); self.assertTrue(ex.field_hold)
+
+    def test_real_obstacles_go_stale(self):
+        ex = self.make(); self.to_policy(ex); self.assertTrue(ex.command('stop'))
+        self.run_steps(ex, 60)
+        self.fields.busy = True                                 # nothing comes back any more (relay or SLAM died)
+        self.run_steps(ex, 120)
+        self.assertEqual(ex.mode, rn.POLICY, ex.reason)         # virtual scenes: static, only the 8 s field timeout
+        self.fields.busy = False; self.run_steps(ex, 60)
+        self.fields.mode, self.fields.dynamic, self.fields.busy = 'real', True, True
+        cmds = self.run_steps(ex, 120)                          # 2.4 s without a lidar update of the fields
+        self.assert_damped(cmds[-1], 'real obstacles stale', ex)
+
+    def test_go_is_refused_on_stale_fields_or_a_route_outside_the_fence(self):
+        ex = self.make(); self.run_steps(ex, 2)
+        self.assertTrue(ex.command('stand'), ex.reason); self.run_steps(ex, int(3.1 / 0.02))
+        self.fields.busy = True; self.run_steps(ex, int(8.2 / 0.02))
+        self.assertFalse(ex.command('go')); self.assertIn('fields stale', ex.reason)
+        self.assertEqual(ex.mode, rn.STAND)                     # (it was accepted and damped one step later)
+        self.fields.busy = False; ex.next_field_request = 0.; self.run_steps(ex, 5)
+        x, y = self.scene.start
+        ex.cfg.geofence = (x - .5, x + .5, y - .5, y + .5)
+        self.assertFalse(ex.command('go')); self.assertIn('route leaves the geofence', ex.reason)
+        ex.cfg.geofence = (-10, 10, -10, 10)
+        self.assertTrue(ex.command('go'), ex.reason); self.assertEqual(ex.mode, rn.POLICY)
 
 
 if __name__ == '__main__':

@@ -166,6 +166,21 @@ class MountCalibrator:
         self.chain.set_mount_correction(roll, pitch)
         return True
 
+    def solve(self, samples, iterations=6):
+        """Calibrate at once from still samples [(t_map_body, q, imu_quat_wxyz), ...] (start-up, before the scene is
+        anchored at the robot): full steps on the same samples until it settles. True if there were enough."""
+        gain, self.gain = self.gain, 1.
+        try:
+            done = False
+            for _ in range(iterations):
+                self.samples = [self.residual(*x) for x in samples]
+                if not self.update():
+                    break
+                done = True
+            return done
+        finally:
+            self.gain = gain; self.samples = []
+
     def warning(self):
         """Text when the head is off the URDF mount by more than warn_deg, else None."""
         roll, pitch = self.chain.correction

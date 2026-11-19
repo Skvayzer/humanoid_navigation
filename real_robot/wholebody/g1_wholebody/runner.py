@@ -43,7 +43,8 @@ class Limits:
     step_budget_s: float = 0.018            # observe + policy + command; the policy dies at a full 20 ms delay
     step_budget_violations: int = 5         # consecutive
     step_hard_limit_s: float = 0.040
-    max_tilt_deg: float = 45.0              # pelvis IMU
+    max_tilt_deg: float = 25.0              # pelvis IMU, STAND/POLICY: 25 = no trigger in ~2450 s of normal gantry walks (max 21),
+                                            # catches a fall the rope holds up (2026-11-19: 38 deg; was 45)
     min_pelvis_z_m: float = 0.45            # the sim's fall criterion
     joint_margin_rad: float = 0.20          # beyond the contract's soft limits
     max_policy_s: float = 0.0               # POLICY time limit [s]; 0: none (was 180 s for the first gantry runs)

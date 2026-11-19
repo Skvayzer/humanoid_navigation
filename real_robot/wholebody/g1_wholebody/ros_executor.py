@@ -73,6 +73,9 @@ def parse(argv=None):
                    help='> 0: points this close to a palm are part of the robot too (an object held in the hand)')
     p.add_argument('--no-dynamic', action='store_true', help="with --static-map: obstacles = the map only, no lidar layer")
     p.add_argument('--static-map', help="static ESDF npz (esdf_layers) of the room: 'real' / 'both' = this map + the lidar's last 0.5 s")
+    p.add_argument('--max-tilt-deg', type=float, default=25.,
+                   help='pelvis tilt (IMU) that DAMPs the robot in STAND/POLICY (fall watchdog; the rope holds a falling '
+                        'robot up, so the old 45 never fired)')
     p.add_argument('--pitch-bias-deg', type=float, default=0.,
                    help='real-robot workaround: the policy sees itself pitched back this many degrees more than it is, '
                         'so it holds its torso that much further forward (0 = as trained)')
@@ -522,6 +525,7 @@ def main(argv=None):
                     upper_filter=args.upper_filter, upper_alpha=args.upper_alpha, upper_cutoff_hz=args.upper_cutoff_hz,
                     upper_rate=args.upper_rate)
     ex = rn.Executor(contract, kin, infer, FieldPlanner(scene), worker, cfg)
+    cfg.limits.max_tilt_deg = args.max_tilt_deg
     if args.pitch_bias_deg:
         from wholebody_core import pitch_bias
         ex.builder.gravity_bias = pitch_bias(args.pitch_bias_deg)

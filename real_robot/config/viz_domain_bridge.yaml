@@ -2,6 +2,7 @@
 # Down (0 -> 7): the viewer topics; the heavy ones only once the viewer subscribes to them (wait_for_subscription).
 # Up (7 -> 0): the five executor operator inputs, nothing else -- the viewer can never publish /lowcmd or any other
 # robot topic (foxglove_bridge 3.6.3 ignores its own client_topic_whitelist).
+# Not here: /g1_wb/virtual_scene (MarkerArray changed between Foxy and Humble) -> foxglove/marker_relay.py.
 name: g1_viz
 from_domain: 0
 to_domain: 7
@@ -20,8 +21,6 @@ topics:
     type: geometry_msgs/msg/PoseStamped
   /g1_wb/sites:
     type: sensor_msgs/msg/PointCloud2
-  /g1_wb/virtual_scene:
-    type: visualization_msgs/msg/MarkerArray
   /g1_wb/esdf_cube:
     type: sensor_msgs/msg/Image
     wait_for_subscription: true

@@ -142,6 +142,9 @@ case "${1:-status}" in
           --mount "type=bind,src=$repo/real_robot/config/foxglove_bridge.yaml,dst=/opt/foxglove_bridge.yaml,readonly=true" \
           --mount "type=bind,src=$repo/real_robot/config/viz_domain_bridge.yaml,dst=/opt/viz_domain_bridge.yaml,readonly=true" \
           --mount "type=bind,src=$repo/real_robot/config/cyclonedds_viz.xml,dst=/opt/cyclonedds_viz.xml,readonly=true" \
+          --mount "type=bind,src=$repo/real_robot/docker/viz_entrypoint.sh,dst=/opt/viz_entrypoint.sh,readonly=true" \
+          --mount "type=bind,src=$repo/real_robot/foxglove/marker_relay.py,dst=/opt/viz/marker_relay.py,readonly=true" \
+          --mount "type=bind,src=$repo/real_robot/demo/bagread.py,dst=/opt/viz/bagread.py,readonly=true" \
           -e CYCLONEDDS_URI=/opt/cyclonedds_viz.xml g1-rr-foxglove:latest >/dev/null
       fi
       for _ in $(seq 1 20); do ss -lnt | grep -q "127.0.0.1:8765 " && { echo "foxglove_bridge on 127.0.0.1:8765 (tunnel: ssh -L 8765:127.0.0.1:8765; writable: /g1_wb/operator, scene, obstacle_mode, goal_pose, speed)"; exit 0; }; sleep 1; done

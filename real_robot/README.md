@@ -1,16 +1,16 @@
 # real_robot — the CAT whole-body policy on our G1
 
 Branch `feature/g1-real-robot` (from `feature/cat-wholebody-policy`). Everything needed to run the
-sim-trained whole-body policy (`cat/wholebody`, 226 observations → 29 joints) on our Unitree G1,
-up to **policy tests on virtual scenes**: the robot walks and localises in the real room, while the
-policy only sees boxes of a training scene placed in the map (`esdf_map_virtual`).
+sim-trained whole-body policy (`cat/wholebody`, 226 observations → 29 joints) on our Unitree G1: the robot
+walks and localises in the real room, and the policy sees **virtual scenes** (boxes of a training scene placed in
+the map), the **real obstacles** from the head LiDAR, or both.
 
 What changed in the repository on this branch:
 
 | Path | Change |
 |---|---|
-| `src/fast_lio` | replaced by **FAST_LIO_G1** (commit `f194a59`: voxel map, G1 IMU noise; see `UPSTREAM_REVISION`, `manifests/fast_lio_g1.sha256`) |
-| `src/g1_sensor_restamp` | new: IMU restamping node (`/utlidar/imu_livox_mid360` → `/g1/imu`) by R. Voronov, MIT |
+| `src/fast_lio` | replaced by **FAST_LIO_G1** (commit `70dcd80`, imported 2026-11-17: voxel map, IMU restamp, localization and relocalization on a saved `.vmap`; see `UPSTREAM_REVISION`, `manifests/fast_lio_g1.sha256`) |
+| `src/g1_sensor_restamp` | IMU restamping node by R. Voronov, MIT; no longer built (FAST_LIO_G1 restamps itself) |
 | `real_robot/` | new: everything below |
 | `tests/test_repository.py` | checks `src/fast_lio` against the FAST_LIO_G1 manifest instead of the old snapshot |
 
@@ -21,31 +21,37 @@ FAST_LIO_G1 does not publish.
 ## Pipeline
 
 ```text
-vendor main board ── /utlidar/cloud_livox_mid360 (10 Hz) ──────────────┐
-                 └── /utlidar/imu_livox_mid360 ── g1_sensor_restamp ── /g1/imu (200 Hz grid)
-                                                                        │
-                       g1-rr-slam:  FAST_LIO_G1 ── camera_init→body (/g1_slam/odometry, 10 Hz)
-                                    + floor_anchor (odom mode)  or  NDT in a saved map (localize mode)
-                                    ── TF map→camera_init (map: gravity up, floor z = 0)
-                                                                        │
-/lowstate (500 Hz) ─────────── g1-rr-wholebody:  pelvis pose = SLAM body · mount⁻¹ · waist FK⁻¹,
-                                                 heading/position from SLAM, roll/pitch from the pelvis IMU
-                                                 virtual scene → fields (separate process, prefetch)
-                                                 observation → ONNX policy → targets + kp/kd + gravity ff
-                                                 watchdogs → /lowcmd (only with --active)
+vendor main board ── /utlidar/cloud_livox_mid360 (10 Hz), /utlidar/imu_livox_mid360     (stamps: the board's clock)
+                                   │
+g1-rr-slam       FAST_LIO_G1 ── camera_init→body (/g1_slam/odometry, 50 Hz), /g1_slam/cloud_registered
+                 floor_anchor ── TF map→slam_map (odom: the floor at the start mark; localize: the saved map's floor frame)
+                 cloud_relay ─── /g1_slam/obstacles (last 0.5 s, 4 cm voxels, each point's scan time), /g1_slam/map
+                                   │
+/lowstate ────── g1-rr-wholebody   pelvis pose = SLAM body · mount⁻¹ · waist FK⁻¹ (mount calibrated online);
+(500 Hz)                           position from SLAM, roll/pitch from the pelvis IMU, heading from SLAM carried
+                                   by the IMU between poses
+                                   obstacles: virtual scene | real (static map + lidar layer, self-filtered) | both
+                                   → fields (solver processes + 10 Hz lidar refresh) → observation → ONNX policy
+                                   → targets + kp/kd + gravity ff → watchdogs → /lowcmd (only with --active)
+                                   │
+g1-rr-foxglove   domain_bridge (robot domain 0 ⇄ viewer domain 7) + foxglove_bridge ── ws://localhost:8765 (SSH tunnel)
 ```
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `wholebody/g1_wholebody/` | executor: `lowlevel` (LowCmd+CRC, raw LowState, remote), `frames` (pelvis chain), `kinematics` (fast FK), `fields` (virtual scenes, worker), `runner` (modes, watchdogs, control step), `ros_executor` (ROS node) |
+| `wholebody/g1_wholebody/` | executor: `lowlevel` (LowCmd+CRC, raw LowState, remote), `frames` (pelvis chain, LiDAR-mount calibration), `kinematics` (fast FK), `fields` (virtual scenes, solver and refresh processes), `esdf_layers` (static map and lidar ESDF layers, mesh self-filter), `runner` (modes, watchdogs, control step), `ros_executor` (ROS node) |
 | `wholebody/g1_wholebody/` (dev) | `fake_robot` (MuJoCo G1 behind LowCmd/LowState), `sim_loop` (closed loop on simulated time), `sim_matrix`, `ros_fake_robot` |
-| `wholebody/tests/` | 30 tests: CRC vs the Unitree SDK library, CDR layout, chain vs MuJoCo, FK identical to training, fields vs the sim, safety behaviour |
-| `slam/` | `run_slam.sh` (odom / mapping / localize), `floor_anchor.py`, `map_builder.py`, `record_traj.py`, tests |
-| `config/` | `fastlio_g1.yaml` (colleague's config + `[RR]` lines), `ndt_g1.yaml`, `cyclonedds_laptop.xml` |
+| `wholebody/tests/` | 59 tests: CRC vs the Unitree SDK library, CDR layout, chain vs MuJoCo, FK identical to training, fields vs the sim, safety behaviour, self-filter, mount calibration, pose age |
+| `wholebody/tools/` | `motor_recorder` (full-rate /lowstate + /lowcmd log), self-filter simulation and its figures, `make_body_points` |
+| `slam/` | `run_slam.sh` (odom / mapping / localize), `floor_anchor.py`, `cloud_relay.py`, `map_builder.py`, `map_floor.py`, tests |
+| `config/` | `fastlio_g1.yaml` (colleague's config + `[RR]` lines), `foxglove_bridge.yaml`, `viz_domain_bridge.yaml`, `cyclonedds_viz.xml` (viewer), `cyclonedds_laptop.xml`; `ndt_g1.yaml` is unused since FAST_LIO_G1 localizes itself |
+| `foxglove/` | layout `wholebody_layout_v3.2.json` (current), the `g1_panels` extension, `esdf_slice.ts` (the layout's ESDF-slice script), `marker_relay.py` (Foxy → Humble markers), layout generators |
+| `demo/` | `ar_demo.py` (AR camera + a bag per walk), `render_take.py` / `replay_take.py` (videos of a take), `bagread.py` |
+| `scenes/` | extra virtual scenes (beams, hurdle): copy into `runtime/wholebody/scenes/` on the robot |
 | `ros/unitree_hg/` | G1 messages incl. LowCmd/MotorCmd (executor image only; the CAT image keeps its telemetry-only copy) |
-| `docker/` | `slam.Dockerfile`, `wholebody.Dockerfile` (targets `runtime`, `dev`) |
+| `docker/` | `slam.Dockerfile`, `wholebody.Dockerfile` (targets `runtime`, `dev`), `demo.Dockerfile`, `foxglove.Dockerfile` (ROS 2 Humble: foxglove_bridge + domain_bridge) |
 | `cat_bridge/` | CAT perception preview (ESDF in Foxglove): LiDAR converter, stationary pose, rosbridge |
 | `scripts/g1.sh` | robot entry point · `scripts/laptop.sh` laptop entry point |
 
@@ -58,18 +64,24 @@ drivers keep executing the last command they received.
 
 | Watchdog → DAMP | Threshold (`runner.Limits`) |
 |---|---|
-| LowState stale / non-finite | > 50 ms |
+| LowState stale / non-finite (joints, IMU quaternion) | > 50 ms |
 | SLAM pose stale (POLICY) | > 0.35 s |
 | SLAM pose jump (POLICY) | > 0.15 m + 1.5 m/s·dt or 10° + 300 °/s·dt between updates |
 | fields stale (POLICY) | > 8 s |
+| real obstacles stale (POLICY, `real` / `both` with the lidar layer) | > 2 s without a lidar update of the fields in use |
 | control step overrun | > 40 ms once, or > 18 ms for 5 steps in a row |
-| pelvis tilt (STAND, POLICY) | > 45° (pelvis IMU) |
+| pelvis tilt (STAND, POLICY) | > 25° (pelvis IMU; `--max-tilt-deg`. 45° never fired: the rope holds a falling robot up) |
 | pelvis height (POLICY) | < 0.45 m |
 | joints beyond soft limits (STAND, POLICY) | > 0.2 rad |
 | outside the geofence (POLICY) | always; POLICY is refused without a geofence |
 | motor temperature | > 90 °C |
 | policy output | non-finite / wrong size |
-| run time (POLICY) | > 180 s |
+| any other exception in the control step | at once (`internal error: …`) |
+
+There is no run-time limit any more (`Limits.max_policy_s = 0`; it was 180 s for the first gantry runs). In a step the
+remote is read first and a latched DAMP is sent before any perception runs, so neither can be delayed by it.
+`go` and `balance` are **refused**, not damped, on stale fields, stale real obstacles, no fresh SLAM pose, or a route
+that leaves the geofence (a scene laid out at the robot may: its status line says so).
 
 Remote (Unitree controller, read from `LowState.wireless_remote`): **L2+B = DAMP at any time** ·
 L1+Y = reset (DAMP → IDLE) · L1+A = stand · L1+X = balance (policy, goal = here) · R1+A = go · R1+B = stop ·
@@ -117,6 +129,11 @@ real_robot/scripts/g1.sh load ~/workspace/artemvoronov/cache/g1_rr_images_arm64.
 real_robot/scripts/g1.sh validate             # native tests incl. the timing checks skipped under QEMU
 ```
 
+The archive holds the SLAM and executor images. The viewer bridge and the demo recorder have their own, built on
+the robot (need internet): `g1.sh build foxglove`, `g1.sh build demo`; `g1.sh up` checks for the viewer image before
+it starts anything. The executor's Python code is bind-mounted from the checkout (`wb`, `static-esdf` and `validate`
+all run the checkout's code): a code change needs a `git pull` on the robot, not a rebuild.
+
 SLAM image: 1.6 GB (was 3.7 GB): the runtime stage installs only the 12 PCL libraries the binaries link; `pcl_ros`/`pcl_conversions` are not linked but pulled all of `libpcl-dev` (PCL/VTK/Qt headers). rosbag2 is in the laptop-only `dev` stage. `build-robot` builds both images in parallel.
 Full emulated build from scratch: 97 min (`lidar_localization_ros2` alone 43 min); arm64 SLAM image 1.45 GB, executor 0.95 GB, archive for the robot 0.6 GB. A rebuild without changes takes seconds (all layers cached). The SLAM builder has one layer per
 package, ordered from stable/expensive to frequently changed: `livox_ros_driver2` → `ndt_omp_ros2` →
@@ -133,33 +150,40 @@ Alternative (needs robot internet): `real_robot/scripts/g1.sh build all`, then `
    `real_robot/cat_bridge/scripts/perception.sh start-with-slam` for the CAT ESDF in Foxglove.
    Walk the robot with the Unitree remote: the ESDF and the pose must stay consistent.
 2. **Map.** Robot on the floor mark, still. `g1.sh slam mapping room1`, walk slowly through the room and
-   back to the mark, `g1.sh slam stop` (writes `runtime/slam/maps/room1.{pcd,yaml}`).
-   Next sessions: start on the same mark, same heading, `g1.sh slam localize room1`.
-   Alongside, `g1.sh wb shadow --scene flat_walk_4m --anchor-at-robot` and walk the robot along the scene once:
-   its log gives the Jetson step time while fields are solved and the data for an offline mount check.
+   back to the mark, `g1.sh slam stop` (writes `runtime/slam/maps/room1.vmap` for FAST-LIO and
+   `room1{_raw.pcd,.pcd,_path.csv,_info.json}`), then `g1.sh static-esdf room1` (the map's floor frame
+   `room1_floor.json` and its static ESDF `room1_esdf.npz`; again whenever the obstacle height band changes).
+   Next sessions: `g1.sh slam localize room1` from anywhere on the map (relocalization; in a symmetric room give
+   it a hint: Foxglove 3D panel → pose estimate), or `g1.sh up --map room1 …` for the whole stack with the static
+   layer. Alongside, `g1.sh wb shadow --scene flat_walk_4m --anchor-at-robot` and walk the robot along the scene
+   once: its log gives the Jetson step time while fields are solved.
 3. **Shadow.** `g1.sh wb shadow --scene sidegap_corridor_048 --anchor-at-robot`. Walk the robot with the
    Unitree controller; check `/g1_wb/status` (latency, step time, fields) and the logs. No motor output.
-   Foxglove: `cat_bridge/scripts/perception.sh viz-start` (rosbridge), SSH tunnel as in `cat_bridge/README.md`,
-   layout `real_robot/foxglove/wholebody_layout.json` (regenerate with `foxglove/make_layout.py`) — the same view in
-   shadow and active runs:
-   * the real room in grey (`/g1_slam/map`, 10 cm, from `slam/cloud_relay.py` in every SLAM mode) under the virtual
-     boxes; the live obstacle cloud `/g1_slam/obstacles` (4 cm, 4 m round the robot) can be switched on;
-   * buttons: operator commands, **obstacles virtual / real / both** (what the fields are made of: the scene's boxes,
-     the live cloud between 0.10 and 1.40 m, or both), and **one per scene** (`/g1_wb/scene`: laid out in front of
-     the robot where it stands; a JSON from the simulator dropped into `runtime/wholebody/scenes/` on the robot is
-     found by name, no rebuild). Scene and obstacle changes are refused while walking; 'real' is refused without a
-     fresh cloud, and a stale cloud stops field updates (the fields-stale watchdog then damps);
+   **Foxglove**: `g1.sh viz` (part of `g1.sh up`), `ssh -N -L 8765:127.0.0.1:8765 <robot>`, Open connection →
+   Foxglove WebSocket → `ws://localhost:8765`. Install the extension `foxglove/g1_panels/g1-wholebody-panels.foxe`
+   and import `foxglove/wholebody_layout_v3.2.json` (the older layout files in the folder cannot read the compressed
+   ESDF cube). The same view in shadow and active runs:
+   * **G1 controls** panel: operator buttons with a large DAMP, **obstacles virtual / real / both** (what the fields
+     are made of: the scene's boxes, the real obstacles between 0.25 and 1.40 m, or both), a **scene** drop-down with
+     top-view previews (`/g1_wb/scene`: laid out in front of the robot where it stands; a JSON dropped into
+     `runtime/wholebody/scenes/` on the robot is found by name, no rebuild), the **speed** slider for operator-speed
+     policies, and a warning line when the head (LiDAR) is off its URDF mount. Scene and obstacle changes are refused
+     while walking; 'real' is refused without a fresh cloud.
    * a **goal by click**: 3D panel → Publish → Pose on the floor → `/g1_wb/goal_pose` → a straight route from the robot
      (refused unless 0.3 m inside the geofence); standing robots wait for `go` (R1+A), a walking robot turns to it.
-   * the rest as before:
-   * 3D, following the robot (TF `map → g1_wb_pelvis`): the virtual boxes (`esdf_map_virtual`, orange), the ESDF
-     slice at 0.75 m (`/g1_wb/sdf_slice`, turbo, −0.1…1.2 m), the 13 body sites the policy samples
-     (`/g1_wb/sites`, red = touching a virtual box … green ≥ 0.3 m), waypoints and path (green), geofence (red),
-     pelvis and goal arrows. The live scan `/g1_slam/cloud_registered` is off by default (heavy over rosbridge).
+   * 3D, following the robot (TF `map → g1_wb_pelvis`): the virtual boxes (orange), the lidar the fields use
+     (`/g1_wb/obstacles_band`), the ESDF slice at the height of the **ESDF height** slider (the layout's
+     `esdf_slice` script cuts it from `/g1_wb/esdf_cube`, the policy's whole window, zlib-compressed), the 13 body
+     sites the policy samples (`/g1_wb/sites`, red = touching … green ≥ 0.3 m), waypoints and path (green), geofence
+     (red), pelvis and goal arrows. `/g1_slam/map`, `/g1_slam/obstacles`, the live scan and (in localize mode)
+     `/g1_slam/prior_map` can be switched on; heavy topics cross the bridge only while subscribed.
    * Indicators: executor mode, and **rope** (`KEEP ROPE: stiff stand / policy waiting / settling`, then
-     `standing: rope may slacken`, `walking`, `DAMP`) — derived from `/g1_wb/status` by the layout's user script.
+     `standing: rope may slacken`, `walking`, `DAMP`), derived from `/g1_wb/status` by the layout's user script.
    * Plots: step and LowState→command time (budget 18 ms), fields age / solve time / pelvis-to-field-goal distance;
      the status as fields; `/rosout` of the executor (mode changes, DAMP reasons).
+   The viewer can write only `/g1_wb/{operator,scene,obstacle_mode,goal_pose,speed}` and `/initialpose`:
+   foxglove_bridge runs in its own DDS domain and `config/viz_domain_bridge.yaml` is the only way back to the robot.
+   `G1_VIZ=rosbridge g1.sh viz` still starts the old rosbridge on 9090 (Python, one core, its queue grew to 2 GB).
 4. **Virtual scenes, active** — follow the checklist below; first run with `flat_walk_4m`.
 
 ### Checklist for the first active run (gantry)
@@ -259,23 +283,70 @@ site may not change severity (crashed the node at the first DAMP — it still le
 (~60 ms every 10 s) and a schedule-reset bug stalled the loop until the LowState watchdog fired. Also: rosbag2
 (Foxy) cannot open a read-only bag (`laptop.sh` replays a working copy).
 
-## Hand-protective policies (2026-11-17)
+## Policies beyond the first two (2026-11-17 … 19)
 
-Four more whole-body policies ship next to `u596` and `robust_delay_v1_u150` (nothing replaced; the default stays
+These ship next to `u596` and `robust_delay_v1_u150` (nothing replaced; the default stays
 `robust_delay_v1_u150`). Same runtime contract and training randomisation; select with `--policy <name>`:
 
 | `--policy` | For |
 |---|---|
-| `stationary_hands_S2far_u200` | standing hand protection (needs fields that see moving objects: not with the current per-waypoint fields) |
+| `stationary_hands_S2far_u200` | standing hand protection (needs fields that see moving objects: the lidar layer) |
 | `stationary_hands_S2far2_u330` | the same with wider margins: the hand retreats farther (0.30 m target) |
 | `stationary_hands_T2_u410` | walking between tables facing forward with the hands raised (gaps >= 0.54 m) |
 | `stationary_hands_E2_u300` | all-round traversal, energy-priced |
 | `stationary_hands_V7_u100` | slow traversal: follows `--speed` (0.1-0.6 m/s, start at 0.15) and stops at the goal (ground-projected goal) |
+| `dynamic_V7r_u400` | V7 trained on (snapshot 400 of the run restarted from V7's u600): the same interface; no README yet |
 
-Each folder's README has its simulation results and limits. None is sim-to-sim tested yet: start in `shadow`, then
-`active` on the gantry.
+Each folder's README has its simulation results and limits. V7 and V7r on the robot: run with
+`--upper-filter avg4` (their contract's `avg2` passes a 12.5 Hz standing limit cycle seen only on the robot).
 
-## Open items before the first active run
+## Real obstacles and the pelvis pose (2026-11-17 … 19)
+
+**Obstacle sources** (`--obstacles`, or the viewer): `virtual` = the scene's boxes; `real` = a **static layer** (the
+ESDF of a saved map, `--static-map`, built once by `g1.sh static-esdf`) plus a **lidar layer** (the last 0.5 s of
+`/g1_slam/obstacles`, 0.25-1.40 m above the floor, stamped into the window with a 0.52 m truncated distance);
+`both` = all of them. A full solve (geodesic to the goal, ~1 Hz) sets the window; a separate process refreshes the
+sdf, boundary and guidance near new lidar voxels at ~10 Hz. Without a static map the base layer is the lidar snapshot
+of the last full solve (up to ~1 s old).
+
+**Self-filter.** The robot's own lidar points are removed with its visual meshes (`body_points.npz`, 4 cm margin)
+posed at each point's scan time from a 10 Hz pose history (± `--self-sweep`, 0.15 s), plus the old capsules
+(`--self-filter both`), plus a column above the pelvis for the gantry rope (`--rope-radius`, 0.5 m).
+
+**Pelvis pose.** Position: the SLAM pose of the LiDAR, through the head mount (URDF: 0.43 m above `torso_link`,
+2.9° pitch) and the waist joints. Roll/pitch: the pelvis IMU (it agrees with the feet's kinematics within ~1°).
+Heading: SLAM, carried by the pelvis IMU from the pose's time to now. Two errors were found on the robot and are
+handled in the executor:
+
+* *The head is not always where the URDF puts it* (no joint, no encoder; measured +3°, +12°, +20° and back to 0°
+  over two days: 10-16 cm of pelvis position, behind the real body). The executor calibrates the mount's roll and
+  pitch whenever the robot is still (torso tilt from SLAM vs from the pelvis IMU + waist FK; first before the scene
+  is anchored at the robot), reports `mount_correction_deg` in the status and warns above 3°. `floor_anchor`'s
+  "tilt … deg" at a SLAM start is the same signal (~3° when the robot hangs upright).
+* *The pose's age.* FAST_LIO_G1 stamps follow the vendor board's clock (~1300 s off the Jetson's). "now − stamp"
+  clipped to 0.5 s made the heading run 0.5 s of turning ahead: 6-8° rms, 30-45° peak on recorded walks. The age is
+  now the stamp difference minus its running minimum (`StampAge`, `--pose-latency`); `pose_age_ms` in the status
+  should read 10-60.
+
+Robot-only launch options: `--max-tilt-deg 25` (fall watchdog), `--pitch-bias-deg N` (the policy sees itself
+pitched back N° more and leans forward; a workaround from before the two fixes above, re-test with 0),
+`--no-mount-autocal`, `--pose-latency`, `--upper-filter avg4`.
+
+Seen on the robot and not in simulation: a slack gantry rope stalls the policy ~0.4 m short of a goal (it pulls the
+crane for metres, but pushes less near the goal); V7/V7r walk with the pelvis pitched 5-8° back; the 12.5 Hz
+standing oscillation above.
+
+## Open items (2026-11-19)
+
+1. **Deploy and verify the review fixes on the robot** (`pose_age_ms` 10-60, `mount_correction_deg` near 0 with the
+   head fixed, no DAMP from the new 2 s obstacle watchdog in a normal `real` run), then re-test with
+   `--pitch-bias-deg 0` and decide whether the capsules in the self-filter are still needed.
+2. **Head mount**: check the screws; the mount moved by up to 20° between sessions.
+3. Without a static map the base ESDF layer keeps obstacles for up to ~1 s after they left.
+4. `dynamic_V7r_u400` has no README; the viewer image installs unpinned `ros-humble-foxglove-bridge` (3.6.3 when
+   built; its `client_topic_whitelist` is not enforced, hence the separate DDS domain).
+
+## Open items before the first active run (all closed)
 
 1. ~~**Robot images**~~: done 2026-10-21 — `g1.sh load` of the laptop-built arm64 archive, `g1.sh validate` on
    the Jetson: `test_wholebody` 8/8, executor tests 32/32 (incl. FK timing and the SDK CRC library).

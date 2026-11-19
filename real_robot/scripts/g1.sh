@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # One entry point for the whole-body pipeline on the G1 (run on the Jetson, from the repo checkout).
 #
-#   g1.sh build [slam|wholebody|demo|foxglove|all]          images (robot needs internet: README "Rebuilding")
-#   g1.sh load <archive.tar.gz>               images built on the laptop (laptop.sh build-robot) instead
-#   g1.sh validate                            offline tests inside the executor image (no network)
+#   g1.sh build [slam|wholebody|demo|foxglove|all]   images (robot needs internet: README "Rebuilding")
+#   g1.sh load <archive.tar.gz>               slam + wholebody images built on the laptop (laptop.sh build-robot); the
+#                                             viewer and demo images are built on the robot: g1.sh build foxglove | demo
+#   g1.sh validate                            offline tests of this checkout's code inside the executor image (no network)
 #   g1.sh slam odom | mapping <name> | localize <name>      SLAM container g1-rr-slam (detached)
 #   g1.sh slam stop                           stop SLAM (mapping: waits for the map to be written)
 #   g1.sh wb shadow <executor args>           policy on live data, motors untouched
@@ -12,16 +13,23 @@
 #   g1.sh op <stand|balance|go|stop|damp|reset|shadow|idle>   operator command to the executor
 #   g1.sh up --geofence XMIN XMAX YMIN YMAX [--map NAME] [executor args]   whole stack once, then drive it from the remote
 #                                             (--map: localize in NAME, real obstacles = its static ESDF + last 0.5 s of lidar)
-#   g1.sh static-esdf <map> [--extent XMIN XMAX YMIN YMAX]   static ESDF of a saved map (once per map)
+#   g1.sh static-esdf <map> [--extent XMIN XMAX YMIN YMAX]   static ESDF of a saved map (once per map, and again when the
+#                                             obstacle height band changes: the file records it and a stale one is refused)
 #   g1.sh down                                stop all of it
-#   g1.sh demo [start|stop] [--fps 10]      AR camera video + bag of what the robot sees, one take per walk
-#   g1.sh viz [start|stop]                    Foxglove bridge whose buttons may write /g1_wb/{operator,scene,obstacle_mode,goal_pose}
+#   g1.sh demo [start|stop] [--fps 10]        AR camera video + bag of what the robot sees, one take per walk
+#   g1.sh viz [start|stop]                    Foxglove bridge (foxglove_bridge behind domain_bridge, ws://localhost:8765 through
+#                                             an SSH tunnel); the viewer may write only /g1_wb/{operator,scene,obstacle_mode,
+#                                             goal_pose,speed} and /initialpose. G1_VIZ=rosbridge: the old bridge on 9090
 #   g1.sh record-motors [start|stop]          full-rate /lowstate + /lowcmd log (read-only)
 #   g1.sh status | logs [slam|wb]
-# executor args: --scene NAME (--anchor X Y YAW | --anchor-at-robot) [--geofence XMIN XMAX YMIN YMAX]
-#                [--policy u596|robust_delay_v1_u150|stationary_hands_S2far_u200|stationary_hands_S2far2_u330|stationary_hands_T2_u410|
-#                          stationary_hands_E2_u300]
-#                [--mount unitree_urdf|robot_xml]
+# executor args (python -m g1_wholebody.ros_executor --help for all):
+#   --scene NAME (--anchor X Y YAW | --anchor-at-robot) --geofence XMIN XMAX YMIN YMAX
+#   --policy NAME          a folder of cat/wholebody: robust_delay_v1_u150 (default), stationary_hands_*, dynamic_V7r_u400, ...
+#   --speed M_S            operator-speed policies (V7, V7r): 0.1-0.6, also from the viewer's slider
+#   --obstacles virtual|real|both   [--static-map FILE] [--rope-radius 0.5] [--self-filter both|mesh|capsules]
+#   --upper-filter avg4    waist/arm command filter (default: the policy contract's; avg4 stops V7's 12.5 Hz shaking)
+#   --max-tilt-deg 25      fall watchdog   --pitch-bias-deg 0   lean-forward workaround   --no-mount-autocal
+#   --pose-latency 0.01    --mount unitree_urdf|robot_xml
 # Everything on disk stays in $G1_WORKSPACE (default: the directory that contains this checkout).
 set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -46,6 +54,13 @@ common=(--network host --restart no --user "$(id -u):$(id -g)" --read-only --cap
         --mount "type=bind,src=$dds,dst=/opt/cyclonedds.xml,readonly=true"
         -e CYCLONEDDS_URI=/opt/cyclonedds.xml -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
         --log-opt max-size=20m --log-opt max-file=3)
+# The executor's code comes from this checkout, not from the image (no rebuild for a code change). Everything that runs
+# that code takes the same mounts: wb, static-esdf and validate (they used to run whatever the image was built with).
+wb_code=(--mount "type=bind,src=$repo/real_robot/wholebody/g1_wholebody,dst=/opt/wb/g1_wholebody,readonly=true"
+         --mount "type=bind,src=$repo/cat/wholebody,dst=/opt/wb/cat/wholebody,readonly=true")
+for f in state_core perception_core wholebody_core wholebody_fields wholebody_sim; do
+  wb_code+=(--mount "type=bind,src=$repo/cat/$f.py,dst=/opt/wb/cat/$f.py,readonly=true"); done
+need_image() { sudo docker image inspect "$1" >/dev/null 2>&1 || { echo "no $1 image: $2" >&2; exit 3; }; }
 
 dockerfile() {   # BuildKit: as is; legacy builder (robot's Docker 24 without buildx): cache mounts stripped
   if sudo docker buildx version >/dev/null 2>&1; then echo "$1"; return; fi
@@ -71,7 +86,9 @@ case "${1:-status}" in
     sudo docker load -i "$archive"
     for i in "$slam_image" "$wb_image"; do sudo docker image inspect "$i" --format "$i: {{.Architecture}} {{.Created}}"; done ;;
   validate)
-    sudo docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,size=256m "$wb_image" validate ;;
+    sudo docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,size=256m "${wb_code[@]}" \
+      --mount "type=bind,src=$repo/real_robot/wholebody/tests,dst=/opt/wb/tests,readonly=true" \
+      --mount "type=bind,src=$repo/cat/tests,dst=/opt/wb/cat/tests,readonly=true" "$wb_image" validate ;;
   slam)
     sub="${2:-}"
     if [[ "$sub" == stop ]]; then
@@ -121,11 +138,7 @@ case "${1:-status}" in
     sudo docker run --detach --name "$wb_name" "${common[@]}" --cpus "${G1_WB_CPUS:-3}" ${G1_WB_CPUSET:+--cpuset-cpus "$G1_WB_CPUSET"} \
       --memory 3g --shm-size 512m --mount "type=bind,src=$runtime/wholebody/logs,dst=/data/logs" \
       --mount "type=bind,src=$runtime/wholebody/scenes,dst=/data/scenes,readonly=true" -e G1_SCENES_DIR=/data/scenes \
-      --mount "type=bind,src=$runtime/slam/maps,dst=/data/maps,readonly=true" \
-      --mount "type=bind,src=$repo/real_robot/wholebody/g1_wholebody,dst=/opt/wb/g1_wholebody,readonly=true" \
-      $(for f in state_core perception_core wholebody_core wholebody_fields wholebody_sim; do
-          printf -- '--mount type=bind,src=%s/cat/%s.py,dst=/opt/wb/cat/%s.py,readonly=true ' "$repo" "$f" "$f"; done) \
-      --mount "type=bind,src=$repo/cat/wholebody,dst=/opt/wb/cat/wholebody,readonly=true" \
+      --mount "type=bind,src=$runtime/slam/maps,dst=/data/maps,readonly=true" "${wb_code[@]}" \
       "$wb_image" run "$@" "${extra[@]}" --log-dir /data/logs >/dev/null
     sleep 3; sudo docker logs "$wb_name" 2>&1 | tail -5 ;;
   viz)              # Foxglove bridge, writable only for /g1_wb/{operator,scene,obstacle_mode,goal_pose,speed}
@@ -136,6 +149,7 @@ case "${1:-status}" in
         exists g1-rr-rosbridge && { sudo docker stop --time 3 g1-rr-rosbridge >/dev/null; sudo docker rm g1-rr-rosbridge >/dev/null; }
         echo "viewer bridge stopped"; exit 0
       fi
+      need_image g1-rr-foxglove:latest "g1.sh build foxglove (needs internet), or G1_VIZ=rosbridge g1.sh viz"
       exists "$fg" && ! running "$fg" && sudo docker rm "$fg" >/dev/null
       if ! exists "$fg"; then
         sudo docker run --detach --name "$fg" "${common[@]}" --cpus 1.5 --memory 768m --tmpfs /tmp:rw,nosuid,nodev,size=64m \
@@ -177,7 +191,7 @@ case "${1:-status}" in
       exists "$dm" && { sudo docker stop --time 15 "$dm" >/dev/null; sudo docker logs "$dm" > "$workspace/runtime/demo/last_container.log" 2>&1; sudo docker rm "$dm" >/dev/null; }
       echo "demo recorder stopped: $workspace/runtime/demo"; exit 0
     fi
-    sudo docker image inspect g1-rr-demo:latest >/dev/null 2>&1 || { echo "no g1-rr-demo image: g1.sh build demo (needs internet)" >&2; exit 3; }
+    need_image g1-rr-demo:latest "g1.sh build demo (needs internet)"
     exists "$dm" && ! running "$dm" && sudo docker rm "$dm" >/dev/null
     exists "$dm" || sudo docker run --detach --name "$dm" "${common[@]}" --cpus 1.5 --memory 1g \
       --mount "type=bind,src=$repo/real_robot/demo/ar_demo.py,dst=/opt/demo/ar_demo.py,readonly=true" \
@@ -192,13 +206,15 @@ case "${1:-status}" in
     sudo docker run --rm "${common[@]}" --memory 2g --mount "type=bind,src=$maps,dst=/data/maps" \
       --mount "type=bind,src=$repo/real_robot/slam,dst=/opt/real_robot/slam,readonly=true" \
       --entrypoint python3 "$slam_image" /opt/real_robot/slam/map_floor.py /data/maps "$name"
-    sudo docker run --rm "${common[@]}" --memory 4g --mount "type=bind,src=$maps,dst=/data/maps" \
+    sudo docker run --rm "${common[@]}" --memory 4g --mount "type=bind,src=$maps,dst=/data/maps" "${wb_code[@]}" \
       --entrypoint python3 -w /opt/wb "$wb_image" -m g1_wholebody.esdf_layers "/data/maps/${name}_static.pcd" \
       "/data/maps/${name}_esdf.npz" --path "/data/maps/${name}_static_path.csv" "$@" ;;
   up)               # the whole stack once (SLAM odom, executor active in IDLE, Foxglove bridge, motor log); then the remote drives it
     shift
     printf '%s\n' "$@" | grep -q -- '--geofence' || { echo "up needs --geofence XMIN XMAX YMIN YMAX (real free floor round the start mark)" >&2; exit 2; }
     printf '%s\n' "$@" | grep -q -- '--scene' || set -- --scene flat_walk_4m --anchor-at-robot "$@"
+    # before anything starts: the viewer image is built apart from the two that g1.sh load brings
+    [[ "${G1_VIZ:-foxglove}" != foxglove ]] || need_image g1-rr-foxglove:latest "g1.sh build foxglove (needs internet), or G1_VIZ=rosbridge g1.sh up ..."
     map=; args=()                  # --map NAME: SLAM localize in NAME + its static ESDF for real obstacles
     while (($#)); do if [[ "$1" == --map ]]; then map="$2"; shift 2; else args+=("$1"); shift; fi; done
     set -- "${args[@]}"
@@ -244,12 +260,12 @@ EOF
     sudo docker exec "$wb_name" bash -c "source /opt/ros/foxy/setup.bash && ros2 topic pub --once /g1_wb/operator std_msgs/msg/String '{data: $cmd}'" >/dev/null
     sleep 0.5; sudo docker logs --tail 3 "$wb_name" 2>&1 ;;
   status)
-    for c in "$slam_name" "$wb_name" g1-cat-bridge g1-cat-perception-preview g1-cat-rosbridge; do
+    for c in "$slam_name" "$wb_name" g1-rr-foxglove g1-rr-rosbridge g1-rr-demo g1-rr-motorlog g1-cat-bridge g1-cat-perception-preview g1-cat-rosbridge; do
       exists "$c" && echo "$c: $(sudo docker inspect --format '{{.State.Status}} {{.Args}}' "$c")" || echo "$c: -"; done
     if running "$wb_name"; then
       sudo docker exec "$wb_name" bash -c "source /opt/ros/foxy/setup.bash && source /opt/wb/messages/setup.bash && timeout 3 ros2 topic echo --full-length /g1_wb/status" 2>/dev/null | sed -n 's/^data: //p' | head -1; fi ;;   # Foxy: no --once
   logs)
     which="${2:-wb}"; [[ "$which" == slam ]] && { tail -n 30 "$runtime/slam/logs/"*.log; exit 0; }
     sudo docker logs --tail 40 "$wb_name" ;;
-  *) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '2,33p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

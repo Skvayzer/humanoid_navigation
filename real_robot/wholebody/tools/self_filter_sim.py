@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Virtual test of the lidar self-filter: the policy in MuJoCo (sim_loop), a simulated head Mid-360 cast against the
-robot's meshes and the scene, the real pipeline (0.5 s window, 4 cm voxels with the newest scan time, 0.10-1.40 m band,
+robot's meshes and the scene, the real pipeline (0.5 s window, 4 cm voxels with the newest scan time, the obstacle band
+esdf_layers.REAL_Z,
 blind 0.3 m) and three filters: the old capsules, the meshes posed at the end of the window, the meshes posed at each
 point's scan time (the new default). Every ray knows what it hit, so the leaks and the losses are exact.
 
@@ -120,7 +121,7 @@ def evaluate(scenario, pts, snaps, out):
         w = pts[(pts[:, 3] > t_end - .5) & (pts[:, 3] <= t_end)]
         w = w[np.argsort(-w[:, 3], kind='stable')]
         _, first = np.unique(np.floor(w[:, :3] / .04).astype(np.int64), axis=0, return_index=True); w = w[first]
-        w = w[(w[:, 2] > .10) & (w[:, 2] < 1.40)]
+        w = w[(w[:, 2] > L.REAL_Z[0]) & (w[:, 2] < L.REAL_Z[1])]
         _, q, pos, quat = snaps[i]
         hist = dict(t=snap_t[max(0, i - 11):i + 1], q=np.array([s[1] for s in snaps[max(0, i - 11):i + 1]]),
                     pos=np.array([s[2] for s in snaps[max(0, i - 11):i + 1]]),

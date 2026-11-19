@@ -1,7 +1,8 @@
 # g1.sh viz: the ONLY path between the robot (domain 0) and foxglove_bridge (domain 7, loopback).
 # Down (0 -> 7): the viewer topics; the heavy ones only once the viewer subscribes to them (wait_for_subscription).
-# Up (7 -> 0): the five executor operator inputs, nothing else -- the viewer can never publish /lowcmd or any other
-# robot topic (foxglove_bridge 3.6.3 ignores its own client_topic_whitelist).
+# Up (7 -> 0): the five executor operator inputs and /initialpose (the relocalization hint: the 3D panel's pose
+# estimate, relayed to FAST-LIO by slam/floor_anchor.py), nothing else -- the viewer can never publish /lowcmd or any
+# other robot topic (foxglove_bridge 3.6.3 ignores its own client_topic_whitelist).
 # Not here: /g1_wb/virtual_scene (MarkerArray changed between Foxy and Humble) -> foxglove/marker_relay.py.
 name: g1_viz
 from_domain: 0
@@ -48,6 +49,9 @@ topics:
   /g1_slam/lio_map:
     type: sensor_msgs/msg/PointCloud2
     wait_for_subscription: true
+  /g1_slam/prior_map:
+    type: sensor_msgs/msg/PointCloud2
+    wait_for_subscription: true
   /g1_slam/cloud_registered:
     type: sensor_msgs/msg/PointCloud2
     wait_for_subscription: true
@@ -68,4 +72,7 @@ topics:
     reversed: true
   /g1_wb/goal_pose:
     type: geometry_msgs/msg/PoseStamped
+    reversed: true
+  /initialpose:
+    type: geometry_msgs/msg/PoseWithCovarianceStamped
     reversed: true

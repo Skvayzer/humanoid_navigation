@@ -26,7 +26,7 @@ The AR head camera is inset on the right. By default the clip runs from shortly 
 to shortly after it stops (later moves, such as a collapse on DAMP, are left out), with the crouch or the passage
 in slow motion (--full: whole take, --slow 1: real time). --stills writes PNGs of the given take times instead.
 If the bag missed /tf_static, map -> camera_init (for the room) is estimated from the standing moments of the take.
---static-map <ply> [--logs <wholebody/logs>]: REAL obstacles. The static map points (frame `map`) in the 0.10-1.40 m band
+--static-map <ply> [--logs <wholebody/logs>]: REAL obstacles. The static map points (frame `map`) in the 0.25-1.40 m band
 become small translucent cubes (virtual scene ignored), the pose comes from the 50 Hz executor log (<take>/../../wholebody/logs
 by default; q, IMU quaternion, aligned to the bag by wall clock) instead of the 1 kHz motor log, and the views are a chase
 camera (2 m behind, 1.5 m up, along the pelvis heading) and a top view, with the goal marker. The clip is the walk
@@ -49,6 +49,7 @@ from bagread import Cdr, latest, load, read_cloud, read_compressed, read_markers
 
 HERE = Path(__file__).resolve().parent
 ROBOT_XML = HERE.parents[1] / 'cat' / 'wholebody' / 'robot.xml'
+REAL_Z = (0.25, 1.40)                   # the executor's real-obstacle band (g1_wholebody.esdf_layers.REAL_Z)
 PW, PH, TOP = 960, 1004, 76               # panel size, title band -> 1920 x 1080
 DT = 0.005                                # pose track step
 SIDE_EXTENT = 2.05                        # side view: visible height (m), orthographic
@@ -273,7 +274,7 @@ def main_real(a, take, out):
     scene = status[0][1].get('scene', '')
     wall, mq, mquat, _ = executor_log(a.logs or take.parents[1] / 'wholebody' / 'logs')
     b = open(a.static_map, 'rb').read(); b = b[b.index(b'end_header\n') + 11:]
-    sp = np.frombuffer(b, '<f4').reshape(-1, 3).astype(float); sp = sp[(sp[:, 2] > 0.10) & (sp[:, 2] < 1.40)]
+    sp = np.frombuffer(b, '<f4').reshape(-1, 3).astype(float); sp = sp[(sp[:, 2] > REAL_Z[0]) & (sp[:, 2] < REAL_Z[1])]
     _, first = np.unique(np.floor(sp / 0.08).astype(np.int64), axis=0, return_index=True); sp = sp[first]      # 8 cm voxels
     gxy = np.array([g[1][:2] for g in goals]); allxy = np.vstack([pxy, gxy])
     near = (np.linalg.norm(sp[:, None, :2] - allxy[None, ::10], axis=2).min(1) < 4.0) if len(sp) < 60000 else np.ones(len(sp), bool)
@@ -351,7 +352,7 @@ def main_real(a, take, out):
                 dr.text((PW - 24 - 330, 58), 'DAMP at t = %.1f s' % (damp[0] - t0), font=f_small, fill=(255, 150, 150, 255))
         plate(dr, (PW + 16, TOP + 14), ['VIEW FROM ABOVE'], [f_lab])
         lx, ly = PW + 16, TOP + 66
-        items = [((150, 150, 150), 'static map, 0.10-1.40 m band'), (GREEN, 'goal'), (BLUE, 'pelvis trail')]
+        items = [((150, 150, 150), 'static map, %.2f-%.2f m band' % REAL_Z), (GREEN, 'goal'), (BLUE, 'pelvis trail')]
         dr.rounded_rectangle((lx, ly, lx + 300, ly + 20 + 28 * len(items)), 8, fill=PAPER + (170,))
         for j, (cc, ss) in enumerate(items):
             dr.rounded_rectangle((lx + 12, ly + 14 + 28 * j, lx + 30, ly + 30 + 28 * j), 3, fill=cc + (255,)); dr.text((lx + 40, ly + 12 + 28 * j), ss, font=f_small, fill=INK + (255,))

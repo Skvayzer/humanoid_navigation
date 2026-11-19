@@ -5,9 +5,9 @@ foxglove_bridge:
     port: 8765
     address: 127.0.0.1
     topic_whitelist: ['^/g1_wb/.*', '^/g1_slam/.*', '^/tf$', '^/tf_static$', '^/rosout$', '^/utlidar/cloud_livox_mid360$']
-    client_topic_whitelist: ['^/g1_wb/(operator|scene|obstacle_mode|goal_pose|speed)$']
-    # clientPublish is safe only because the bridge sits in domain 7: viz_domain_bridge.yaml lets just the five operator
-    # topics back to the robot (this bridge's own client_topic_whitelist is NOT enforced in 3.6.3)
+    client_topic_whitelist: ['^/g1_wb/(operator|scene|obstacle_mode|goal_pose|speed)$', '^/initialpose$']
+    # clientPublish is safe only because the bridge sits in domain 7: viz_domain_bridge.yaml lets just these topics
+    # back to the robot (this bridge's own client_topic_whitelist is NOT enforced in 3.6.3)
     capabilities: [clientPublish]
     service_whitelist: ['^$']
     param_whitelist: ['^$']

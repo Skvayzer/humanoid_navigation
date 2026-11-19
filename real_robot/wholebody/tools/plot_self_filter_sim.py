@@ -24,7 +24,8 @@ def window(pts, t_end):
     w = pts[(pts[:, 3] > t_end - .5) & (pts[:, 3] <= t_end)]
     w = w[np.argsort(-w[:, 3], kind='stable')]
     _, first = np.unique(np.floor(w[:, :3] / .04).astype(np.int64), axis=0, return_index=True); w = w[first]
-    return w[(w[:, 2] > .10) & (w[:, 2] < 1.40)]
+    from g1_wholebody.esdf_layers import REAL_Z
+    return w[(w[:, 2] > REAL_Z[0]) & (w[:, 2] < REAL_Z[1])]
 
 
 def filters(w, snaps_i, d):

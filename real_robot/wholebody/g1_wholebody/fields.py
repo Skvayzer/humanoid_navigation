@@ -98,7 +98,8 @@ class VirtualScene:
         axes = [first_center[i] + np.arange(shape[i]) * DX for i in range(3)]
         centers = np.stack(np.meshgrid(*axes, indexing='ij'), -1).reshape(-1, 3)
         occ = box_corners_test(self.boxes, centers, DX).reshape(shape)
-        if self.robot_perception:                       # what the real LiDAR volume would keep (sim option)
+        if self.robot_perception:                       # training's perception volume (sim option; virtual boxes only:
+                                                        # the real lidar band is esdf_layers.REAL_Z)
             z = axes[2]; occ[:, :, z < .10] = False; occ[:, :, z > 1.4] = False
         return occ
 

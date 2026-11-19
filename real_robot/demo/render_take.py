@@ -6,7 +6,7 @@
 Reads <take_dir>/bag/*.db3 (ros2 bag, sqlite3) with no ROS install: a small CDR reader for the few message types the
 demo records. Top-down (map frame): the room from SLAM (grey), the virtual boxes (orange), route and geofence, the
 policy's body sites coloured by their distance to the virtual obstacles, the pelvis trail and heading, the goal.
---static-map <ply> (real obstacles): the obstacles are the points of a static map (frame `map`) in the 0.10-1.40 m
+--static-map <ply> (real obstacles): the obstacles are the points of a static map (frame `map`) in the 0.25-1.40 m
 band instead of the SLAM cloud and the virtual boxes (the virtual scene topic is ignored); the clip is trimmed to the
 walking segments (mode POLICY, pelvis moving). With no AR frames in the bag the left panel is the policy's ESDF slice
 (/g1_wb/sdf_slice, the height of the pelvis) instead of the head camera.
@@ -23,6 +23,8 @@ import numpy as np
 
 
 from bagread import Cdr, latest, load, read_cloud, read_compressed, read_markers, read_pose_stamped, read_string, read_tf, rot, yaw
+
+REAL_Z = (0.25, 1.40)      # the executor's real-obstacle band (g1_wholebody.esdf_layers.REAL_Z; this tool has no ROS/executor imports)
 
 
 def latch_state(st):
@@ -50,7 +52,7 @@ def main():
     if real:
         scenes = []                                                          # virtual boxes were not used
         b = open(a.static_map, 'rb').read(); b = b[b.index(b'end_header\n') + 11:]
-        sp = np.frombuffer(b, '<f4').reshape(-1, 3); sp = sp[(sp[:, 2] > 0.10) & (sp[:, 2] < 1.40)]
+        sp = np.frombuffer(b, '<f4').reshape(-1, 3); sp = sp[(sp[:, 2] > REAL_Z[0]) & (sp[:, 2] < REAL_Z[1])]
     if not frames and not (real and slices):
         raise SystemExit('no AR frames in %s' % take)
     # fixed top-down window: the trail, the virtual scene and 1.5 m round them
@@ -165,7 +167,7 @@ def main():
             if t >= dampt:
                 cv2.rectangle(top, (0, 0), (S - 1, S - 1), (40, 40, 220), 6); cv2.putText(top, 'POLICY -> DAMP', (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (40, 40, 220), 2, cv2.LINE_AA)
         cv2.putText(top, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (40, 40, 40), 1, cv2.LINE_AA)
-        cv2.putText(top, 'top view (map), 1 m grid: ' + ('static map 0.1-1.4 m (grey), body sites by sdf (red = near), trail, goal' if real else 'room (grey), virtual obstacles (orange), route, trail, goal'),
+        cv2.putText(top, 'top view (map), 1 m grid: ' + ('static map 0.25-1.4 m (grey), body sites by sdf (red = near), trail, goal' if real else 'room (grey), virtual obstacles (orange), route, trail, goal'),
                     (10, S - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (90, 90, 90), 1, cv2.LINE_AA)
         frame = np.zeros((S, cam_w + S, 3), np.uint8); frame[:cam_h, :cam_w] = cam; frame[:, cam_w:] = top
         if frames:
